@@ -1,6 +1,4 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { RecoilRoot, useRecoilState } from 'recoil';
-import { chatHistoryState } from './recoil/atoms';
 import {
   AppBar,
   Toolbar,
@@ -28,6 +26,7 @@ import SendIcon from "@mui/icons-material/Send";
 import NoteAddIcon from "@mui/icons-material/LocalHospital";
 import SmartToyTwoToneIcon from "@mui/icons-material/SmartToyTwoTone"; // AI 로봇 아이콘
 import MoreVertIcon from "@mui/icons-material/MoreVert";
+import { getChatHistory, saveChatHistory } from './indexdb/indexedDB';
 
 const App = () => {
   const [isSidebarOpen, setSidebarOpen] = useState(true);
@@ -41,13 +40,13 @@ const App = () => {
   const [isEditing, setIsEditing] = useState(null);
   const [newTitle, setNewTitle] = useState("");
   const [selectedChatIndex, setSelectedChatIndex] = useState(null);
+  const [chatHistory, setChatHistory] = useState([]);
   const timeoutRef = useRef(null);
   const controllerRef = useRef(null);
   const chatBoxRef = useRef(null);
   const ws = useRef(null);
 
-  const [chatHistory, setChatHistory] = useRecoilState(chatHistoryState);
-  const chatHistoryLimit = 2; // 최대 채팅 히스토리 개수
+  const chatHistoryLimit = 2;
 
   const connectWebSocket = useCallback(() => {
     if (ws.current && (ws.current.readyState === WebSocket.OPEN || ws.current.readyState === WebSocket.CONNECTING)) {
@@ -73,20 +72,11 @@ const App = () => {
     };
   
     ws.current.onmessage = (event) => {
-      // if (selectedChatIndex === null) {
-      //   console.log("selectedChatIndex is not set");
-      //   return;
-      // }
-  
       const serverMessage = event.data;
       console.log("Received server message:", serverMessage);
   
-      // 현재 채팅 화면 업데이트
       setCurrentChat((prevChat) => [...prevChat, { sender: "server", text: serverMessage }]);
-  
       setIsWaitingForServer(false);
-  
-      // Recoil 상태 업데이트
       updateChatHistory(serverMessage, "server");
     };
   
@@ -96,18 +86,15 @@ const App = () => {
   
     ws.current.onclose = () => {
       console.log('WebSocket connection closed, retrying in 20 seconds...');
-      setTimeout(connectWebSocket, 20000); // 20초 후에 재시도
+      setTimeout(connectWebSocket, 20000);
     };
   }, []);
 
-
   useEffect(() => {
-    // selectedModel 상태가 변경될 때마다 웹 소켓으로 메시지 전송
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify({ model: selectedModel }));
     }
-  }, []);
-
+  }, [selectedModel]);
 
   useEffect(() => {
     connectWebSocket();
@@ -125,6 +112,14 @@ const App = () => {
     }
   }, [currentChat]);
 
+  useEffect(() => {
+    const fetchChatHistory = async () => {
+      const history = await getChatHistory();
+      setChatHistory(history);
+    };
+    fetchChatHistory();
+  }, []);
+
   const toggleSidebar = () => {
     setSidebarOpen(!isSidebarOpen);
   };
@@ -136,7 +131,6 @@ const App = () => {
   const handleSend = () => {
     if (!inputText.trim() || isWaitingForServer) return;
   
-    // 유저 메시지 추가
     const newUserMessage = inputText;
     setCurrentChat((prevChat) => [...prevChat, { sender: "user", text: newUserMessage }]);
     setInputText("");
@@ -154,14 +148,12 @@ const App = () => {
   
     if (ws.current.readyState !== WebSocket.OPEN) {
       connectWebSocket();
-      setTimeout(sendMessage, 3000); // 3초 후에 재시도
+      setTimeout(sendMessage, 3000);
     } else {
       sendMessage();
     }
   
-    // Recoil 상태 업데이트
     setChatHistory((prevHistory) => {
-      // 최초 채팅인지 확인
       if (selectedChatIndex === null) {
         const newChatIndex = prevHistory.length;
         const newChatTitle = `새로운 채팅 ${new Date().toLocaleString()}`;
@@ -172,13 +164,10 @@ const App = () => {
           messages: [{ sender: "user", text: newUserMessage }],
         };
   
-        console.log("Added first chat:", newChat);
-  
-        // 새로운 타이틀 추가 및 선택
         setSelectedChatIndex(newChatIndex);
+        saveChatHistory([...prevHistory, newChat]);
         return [...prevHistory, newChat];
       } else {
-        // 기존 채팅에 메시지 추가
         const updatedHistory = prevHistory.map((chat) => {
           if (chat.index === selectedChatIndex) {
             return { ...chat, messages: [...chat.messages, { sender: "user", text: newUserMessage }] };
@@ -186,7 +175,7 @@ const App = () => {
           return chat;
         });
   
-        console.log("Updated chat history:", updatedHistory);
+        saveChatHistory(updatedHistory);
         return updatedHistory;
       }
     });
@@ -194,7 +183,6 @@ const App = () => {
 
   const updateChatHistory = (newMessage, sender) => {
     setChatHistory((prevHistory) => {
-      // 현재 selectedChatIndex가 없을 경우 기본값으로 설정
       let currentChatIndex = selectedChatIndex;
   
       if (currentChatIndex === null) {
@@ -205,7 +193,6 @@ const App = () => {
       const chatExists = prevHistory.some(chat => chat.index === currentChatIndex);
   
       if (chatExists) {
-        // 기존 채팅창에 메시지 추가
         const updatedHistory = prevHistory.map((chat) => {
           if (chat.index === currentChatIndex) {
             return { ...chat, messages: [...chat.messages, { sender, text: newMessage }] };
@@ -213,10 +200,9 @@ const App = () => {
           return chat;
         });
   
-        console.log("Updated chat history (existing chat):", updatedHistory);
+        saveChatHistory(updatedHistory);
         return updatedHistory;
       } else {
-        // 새로운 채팅창 생성
         const newChatTitle = new Date().toLocaleString();
         const newChat = {
           index: currentChatIndex,
@@ -226,13 +212,12 @@ const App = () => {
         };
   
         const updatedHistory = [...prevHistory, newChat];
-        console.log("Updated chat history (new chat):", updatedHistory);
+        saveChatHistory(updatedHistory);
         return updatedHistory;
       }
     });
   };
-  
-  
+
   const handleKeyPress = (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
@@ -256,17 +241,14 @@ const App = () => {
   };
 
   const handleChatSelect = (index) => {
-    console.log("Selected index:", index);
     setSelectedChatIndex(index);
   
-    // Recoil 상태에서 선택된 채팅을 찾고, 현재 채팅 상태를 업데이트
     setChatHistory((prevHistory) => {
       const selectedChat = prevHistory.find(chat => chat.index === index);
       if (selectedChat) {
-        console.log("Selected chat:", selectedChat);
         setCurrentChat(selectedChat.messages || []);
       }
-      return prevHistory; // Recoil 상태를 유지
+      return prevHistory;
     });
   };
 
@@ -284,14 +266,14 @@ const App = () => {
     };
     setChatHistory((prevHistory) => {
       const newHistory = [...prevHistory, newChat];
-      console.log("New chat added:", newHistory);
+      saveChatHistory(newHistory);
       return newHistory;
     });
     setCurrentChat([
       { sender: "server", text: "새로운 채팅이 시작되었습니다." },
       { sender: "server", text: "무엇을 도와드릴까요?" }
     ]);
-    setSelectedChatIndex(newChat.index); // 새로운 타이틀 설정
+    setSelectedChatIndex(newChat.index);
   };
 
   const toggleChatHistory = () => {
@@ -312,6 +294,7 @@ const App = () => {
       return chat;
     });
     setChatHistory(updatedHistory);
+    saveChatHistory(updatedHistory);
     setIsEditing(null);
   };
 
@@ -323,9 +306,7 @@ const App = () => {
     acc[date].push(chat.titles[0]);
     return acc;
   }, {});
-
   return (
-    <RecoilRoot>
       <Box sx={{ position: "relative", width: "100vw", height: "100vh", bgcolor: "#1e1e1e" }}>
         {/* 사이드바 */}
         {isSidebarOpen && (
@@ -619,7 +600,6 @@ const App = () => {
           </Alert>
         </Snackbar>
       </Box>
-    </RecoilRoot>
   );
 };
 
