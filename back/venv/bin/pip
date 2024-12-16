@@ -1,4 +1,4 @@
-#!/Users/yangjaehyeon/workspace/myproject/ai-native-solution/back/venv/bin/python3.12
+#!/Users/jaehyun.yang/workspace/myproject/ai-native-solution/back/venv/bin/python3.13
 # -*- coding: utf-8 -*-
 import re
 import sys

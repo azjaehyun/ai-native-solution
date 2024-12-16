@@ -27,6 +27,7 @@ import NoteAddIcon from "@mui/icons-material/LocalHospital";
 import SmartToyTwoToneIcon from "@mui/icons-material/SmartToyTwoTone";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import { getChatHistory, saveChatHistory } from './indexdb/indexedDB';
+import axios from 'axios';
 
 const App = () => {
   const [isSidebarOpen, setSidebarOpen] = useState(true);
@@ -44,92 +45,28 @@ const App = () => {
   const timeoutRef = useRef(null);
   const controllerRef = useRef(null);
   const chatBoxRef = useRef(null);
-  const ws = useRef(null);
 
   const chatHistoryLimit = 2;
 
-  const connectWebSocket = useCallback(() => {
-    if (ws.current && (ws.current.readyState === WebSocket.OPEN || ws.current.readyState === WebSocket.CONNECTING)) {
-      return;
-    }
-
-    ws.current = new WebSocket('ws://localhost:8765');
-
-    const connectionTimeout = setTimeout(() => {
-      if (ws.current.readyState !== WebSocket.OPEN) {
-        ws.current.close();
-      }
-    }, 3000);
-
-    ws.current.onopen = () => {
-      clearTimeout(connectionTimeout);
-      console.log('WebSocket connection established');
-      setSnackbarOpen(true);
-      setCurrentChat([{ sender: "server", text: "무엇을 도와드릴까요?" }]);
-      setTimeout(() => {
-        setSnackbarOpen(false);
-      }, 3000);
-    };
-
-    ws.current.onmessage = (event) => {
-      const serverMessage = event.data;
-      console.log("Received server message:", serverMessage);
-
-      setCurrentChat((prevChat) => [...prevChat, { sender: "server", text: serverMessage }]);
-      setIsWaitingForServer(false);
-      updateChatHistory(serverMessage, "server");
-    };
-
-    ws.current.onerror = (error) => {
-      console.error('WebSocket error:', error);
-    };
-
-    ws.current.onclose = () => {
-      console.log('WebSocket connection closed, retrying in 20 seconds...');
-      setTimeout(connectWebSocket, 20000);
-    };
-  }, []);
-
   useEffect(() => {
-    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({ model: selectedModel }));
-    } else {
-      connectWebSocket();
-    }
-
-    return () => {
-      if (ws.current) {
-        ws.current.close();
-      }
-    };
-  }, [selectedModel, connectWebSocket]);
-
-  useEffect(() => {
-    if (chatBoxRef.current) {
-      chatBoxRef.current.scrollTop = chatBoxRef.current.scrollHeight;
-    }
-
-    const fetchChatHistory = async () => {
+    const loadChatHistory = async () => {
       const history = await getChatHistory();
       setChatHistory(history);
     };
-    fetchChatHistory();
+    loadChatHistory();
+  }, []);
 
-    if (selectedChatIndex === null && chatHistory.length > 0) {
-      setSelectedChatIndex(chatHistory.length - 1);
-      setCurrentChat(chatHistory[chatHistory.length - 1].messages);
+  const sendMessageToServer = async (message) => {
+    try {
+      const response = await axios.post('http://localhost:8765/echo', { message });
+      return response.data.resultData.message;
+    } catch (error) {
+      console.error('Error sending message to server:', error);
+      return 'Error: Unable to send message to server';
     }
-  }, [currentChat, chatHistory, selectedChatIndex]);
-
-  const toggleSidebar = () => {
-    setSidebarOpen(!isSidebarOpen);
   };
 
-  const handleModelChange = (event) => {
-    setSelectedModel(event.target.value);
-  };
-
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!inputText.trim() || isWaitingForServer) return;
 
     if (selectedChatIndex === null && chatHistory.length >= chatHistoryLimit) {
@@ -142,22 +79,9 @@ const App = () => {
     setInputText("");
     setIsWaitingForServer(true);
 
-    const sendMessage = () => {
-      if (ws.current.readyState === WebSocket.OPEN) {
-        ws.current.send(newUserMessage);
-        console.log("Sent message to server:", newUserMessage);
-      } else {
-        console.error("WebSocket is not open, retrying connection...");
-        connectWebSocket();
-      }
-    };
-
-    if (ws.current.readyState !== WebSocket.OPEN) {
-      connectWebSocket();
-      setTimeout(sendMessage, 3000);
-    } else {
-      sendMessage();
-    }
+    const serverMessage = await sendMessageToServer(newUserMessage);
+    setCurrentChat((prevChat) => [...prevChat, { sender: "server", text: serverMessage }]);
+    setIsWaitingForServer(false);
 
     setChatHistory((prevHistory) => {
       if (selectedChatIndex === null) {
@@ -167,7 +91,10 @@ const App = () => {
           index: newChatIndex,
           date: new Date().toLocaleDateString(),
           titles: [newChatTitle],
-          messages: [{ sender: "user", text: newUserMessage }],
+          messages: [
+            { sender: "user", text: newUserMessage },
+            { sender: "server", text: serverMessage }
+          ],
         };
 
         setSelectedChatIndex(newChatIndex);
@@ -176,7 +103,14 @@ const App = () => {
       } else {
         const updatedHistory = prevHistory.map((chat) => {
           if (chat.index === selectedChatIndex) {
-            return { ...chat, messages: [...chat.messages, { sender: "user", text: newUserMessage }] };
+            return {
+              ...chat,
+              messages: [
+                ...chat.messages,
+                { sender: "user", text: newUserMessage },
+                { sender: "server", text: serverMessage }
+              ],
+            };
           }
           return chat;
         });
@@ -229,14 +163,6 @@ const App = () => {
       event.preventDefault();
       handleSend();
     }
-  };
-
-  const handleStopRequest = () => {
-    if (controllerRef.current) {
-      controllerRef.current.abort();
-    }
-    setIsWaitingForServer(false);
-    clearTimeout(timeoutRef.current);
   };
 
   const handleFileUpload = (event) => {
@@ -302,6 +228,21 @@ const App = () => {
     setChatHistory(updatedHistory);
     saveChatHistory(updatedHistory);
     setIsEditing(null);
+  };
+
+  const toggleSidebar = () => {
+    setSidebarOpen(!isSidebarOpen);
+  };
+
+  const handleModelChange = (event) => {
+    setSelectedModel(event.target.value);
+  };
+
+  const handleStopRequest = () => {
+    if (controllerRef.current) {
+      controllerRef.current.abort();
+      setIsWaitingForServer(false);
+    }
   };
 
   const groupedChatHistory = chatHistory.reduce((acc, chat) => {
