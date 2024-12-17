@@ -56,6 +56,12 @@ const App = () => {
     loadChatHistory();
   }, []);
 
+  useEffect(() => {
+    if (chatBoxRef.current) {
+      chatBoxRef.current.scrollTop = chatBoxRef.current.scrollHeight;
+    }
+  }, [currentChat]);
+
   const sendMessageToServer = async (message) => {
     try {
       const response = await axios.post('http://localhost:8765/echo', { message });

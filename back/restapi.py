@@ -1,10 +1,13 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 
 app = Flask(__name__)
+CORS(app)  # CORS 설정
 
 @app.route('/echo', methods=['POST', 'GET', 'PUT', 'DELETE'])
 def echo():
     try:
+        print(request)
         if request.is_json:
             data = request.json
         else:
