@@ -64,8 +64,10 @@ const App = () => {
 
   const sendMessageToServer = async (message) => {
     try {
-      const response = await axios.post('http://localhost:8765/echo', { message });
-      return response.data.resultData.message;
+      console.log("message", message);
+      const response = await axios.post('https://x4v4n6sd92.execute-api.ap-northeast-2.amazonaws.com/prd/poc-type-a', { message });
+      const responseData = JSON.parse(response.data.body);
+      return responseData.resultData.message;
     } catch (error) {
       console.error('Error sending message to server:', error);
       return 'Error: Unable to send message to server';
@@ -251,12 +253,12 @@ const App = () => {
     }
   };
 
-  const groupedChatHistory = chatHistory.reduce((acc, chat) => {
+  const groupedChatHistory = chatHistory.reduce((acc, chat, index) => {
     const date = chat.date;
     if (!acc[date]) {
       acc[date] = [];
     }
-    acc[date].push(chat.titles[0]);
+    acc[date].push({ title: chat.titles[0], index });
     return acc;
   }, {});
 
@@ -327,16 +329,16 @@ const App = () => {
                     {date}
                   </Typography>
                   {groupedChatHistory[date].map((title, titleIndex) => (
-                    <ListItem key={titleIndex} button="true" onClick={() => handleChatSelect(titleIndex)}>
+                    <ListItem key={titleIndex} button="true" onClick={() => handleChatSelect(title.index)}>
                       <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-                        {isEditing === titleIndex ? (
+                        {isEditing === title.index ? (
                           <TextField
                             value={newTitle}
                             onChange={(e) => setNewTitle(e.target.value)}
-                            onBlur={() => handleSaveTitle(titleIndex)}
+                            onBlur={() => handleSaveTitle(title.index)}
                             onKeyPress={(e) => {
                               if (e.key === "Enter") {
-                                handleSaveTitle(titleIndex);
+                                handleSaveTitle(title.index);
                               }
                             }}
                             onClick={(event) => event.stopPropagation()}
@@ -345,8 +347,8 @@ const App = () => {
                           />
                         ) : (
                           <>
-                            <ListItemText primary={title} sx={{ color: titleIndex === selectedChatIndex ? "#a8dadc" : "#fff", flexGrow: 1 }} />
-                            <IconButton onClick={(event) => { event.stopPropagation(); handleEditTitle(titleIndex, event); }}>
+                            <ListItemText primary={title.title} sx={{ color: title.index === selectedChatIndex ? "#a8dadc" : "#fff", flexGrow: 1 }} />
+                            <IconButton onClick={(event) => { event.stopPropagation(); handleEditTitle(title.index, event); }}>
                               <MoreVertIcon />
                             </IconButton>
                           </>

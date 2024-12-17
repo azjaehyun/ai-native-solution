@@ -31,7 +31,12 @@ export const getChatHistory = async () => {
     const request = store.getAll();
 
     request.onsuccess = (event) => {
-      resolve(event.target.result);
+      const result = event.target.result;
+      // 인덱스를 다시 설정
+      result.forEach((chat, index) => {
+        chat.index = index;
+      });
+      resolve(result);
     };
 
     request.onerror = (event) => {
@@ -46,7 +51,9 @@ export const saveChatHistory = async (chatHistory) => {
     const transaction = db.transaction(STORE_NAME, 'readwrite');
     const store = transaction.objectStore(STORE_NAME);
 
-    chatHistory.forEach(chat => {
+    // 인덱스를 다시 설정
+    chatHistory.forEach((chat, index) => {
+      chat.index = index;
       store.put(chat);
     });
 
