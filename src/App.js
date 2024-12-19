@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   AppBar,
   Toolbar,
@@ -19,6 +19,8 @@ import {
   Tooltip,
   Switch,
   FormControlLabel,
+  useMediaQuery,
+  useTheme
 } from "@mui/material";
 import MenuIcon from "@mui/icons-material/Menu";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
@@ -30,23 +32,26 @@ import { getChatHistory, saveChatHistory } from './indexdb/indexedDB';
 import axios from 'axios';
 
 const App = () => {
+
+  const theme = useTheme();
+  const isSmallScreen = useMediaQuery(theme.breakpoints.down("sm"));
+
   const [isSidebarOpen, setSidebarOpen] = useState(true);
-  const [selectedModel, setSelectedModel] = useState("ChatGPT 4.0");
+  const [selectedModel, setSelectedModel] = useState("claude3.5");
   const [currentChat, setCurrentChat] = useState([]);
   const [inputText, setInputText] = useState("");
   const [isWaitingForServer, setIsWaitingForServer] = useState(false);
-  const [isSnackbarOpen, setSnackbarOpen] = useState(false);
   const [isAlertOpen, setAlertOpen] = useState(false);
   const [isChatHistoryEnabled, setIsChatHistoryEnabled] = useState(true);
   const [isEditing, setIsEditing] = useState(null);
   const [newTitle, setNewTitle] = useState("");
   const [selectedChatIndex, setSelectedChatIndex] = useState(null);
   const [chatHistory, setChatHistory] = useState([]);
-  const timeoutRef = useRef(null);
   const controllerRef = useRef(null);
   const chatBoxRef = useRef(null);
+  
 
-  const chatHistoryLimit = 2;
+  const chatHistoryLimit = 5;
 
   useEffect(() => {
     const loadChatHistory = async () => {
@@ -54,25 +59,28 @@ const App = () => {
       setChatHistory(history);
     };
     loadChatHistory();
-  }, []);
-
-  useEffect(() => {
     if (chatBoxRef.current) {
       chatBoxRef.current.scrollTop = chatBoxRef.current.scrollHeight;
     }
   }, [currentChat]);
 
-  const sendMessageToServer = async (message) => {
+  const sendMessageToServer = async (message,chatHistory,model) => {
     try {
       console.log("message", message);
-      const response = await axios.post('https://x4v4n6sd92.execute-api.ap-northeast-2.amazonaws.com/prd/poc-type-a', { message });
-      const responseData = JSON.parse(response.data.body);
-      return responseData.resultData.message;
+      const chatHistoryMessage = chatHistory ? chatHistory.messages : [];
+      console.log("chatHistoryMessage", chatHistoryMessage);
+      const response = await axios.post('https://x4v4n6sd92.execute-api.ap-northeast-2.amazonaws.com/prd/poc-type-a',
+         { message , chatHistoryMessage , model }
+      );
+      const responseData = response.data;
+      console.log("responseData", responseData.resultData.message);
+      return responseData.resultData.message.replace(/\n/g, '<br/>');
     } catch (error) {
       console.error('Error sending message to server:', error);
       return 'Error: Unable to send message to server';
     }
   };
+
 
   const handleSend = async () => {
     if (!inputText.trim() || isWaitingForServer) return;
@@ -86,8 +94,8 @@ const App = () => {
     setCurrentChat((prevChat) => [...prevChat, { sender: "user", text: newUserMessage }]);
     setInputText("");
     setIsWaitingForServer(true);
-
-    const serverMessage = await sendMessageToServer(newUserMessage);
+    
+    const serverMessage = await sendMessageToServer(newUserMessage,chatHistory[selectedChatIndex],selectedModel);
     setCurrentChat((prevChat) => [...prevChat, { sender: "server", text: serverMessage }]);
     setIsWaitingForServer(false);
 
@@ -129,42 +137,6 @@ const App = () => {
     });
   };
 
-  const updateChatHistory = (newMessage, sender) => {
-    setChatHistory((prevHistory) => {
-      let currentChatIndex = selectedChatIndex;
-
-      if (currentChatIndex === null) {
-        currentChatIndex = prevHistory.length > 0 ? prevHistory.length - 1 : 0;
-        setSelectedChatIndex(currentChatIndex);
-      }
-
-      const chatExists = prevHistory.some(chat => chat.index === currentChatIndex);
-
-      if (chatExists) {
-        const updatedHistory = prevHistory.map((chat) => {
-          if (chat.index === currentChatIndex) {
-            return { ...chat, messages: [...chat.messages, { sender, text: newMessage }] };
-          }
-          return chat;
-        });
-
-        saveChatHistory(updatedHistory);
-        return updatedHistory;
-      } else {
-        const newChatTitle = new Date().toLocaleString();
-        const newChat = {
-          index: currentChatIndex,
-          date: new Date().toLocaleDateString(),
-          titles: [newChatTitle],
-          messages: [{ sender, text: newMessage }],
-        };
-
-        const updatedHistory = [...prevHistory, newChat];
-        saveChatHistory(updatedHistory);
-        return updatedHistory;
-      }
-    });
-  };
 
   const handleKeyPress = (event) => {
     if (event.key === "Enter") {
@@ -253,12 +225,14 @@ const App = () => {
     }
   };
 
-  const groupedChatHistory = chatHistory.reduce((acc, chat, index) => {
+  const sortedChatHistory = [...chatHistory].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  const groupedChatHistory = sortedChatHistory.reduce((acc, chat, index) => {
     const date = chat.date;
     if (!acc[date]) {
       acc[date] = [];
     }
-    acc[date].push({ title: chat.titles[0], index });
+    acc[date].push({ title: chat.titles[0], index: chat.index });
     return acc;
   }, {});
 
@@ -388,16 +362,21 @@ const App = () => {
                 <MenuIcon />
               </IconButton>
             )}
-            <Typography variant="h6" sx={{ flexGrow: 1 }}>
-              AWS Bedrock POC - AI Native Team
+            <Typography variant="h6"
+                  sx={{
+                    flexGrow: 1,
+                    fontSize: isSmallScreen ? '1rem' : '1.5rem', // 작은 화면에서는 작은 글자 크기, 큰 화면에서는 큰 글자 크기
+                  }} 
+            >
+              AWS Bedrock PoC
             </Typography>
             <Select
               value={selectedModel}
               onChange={handleModelChange}
               sx={{ bgcolor: "#444", color: "#fff", borderRadius: 1 }}
             >
-              <MenuItem value="ChatGPT 4.0">ChatGPT 4.0</MenuItem>
-              <MenuItem value="ChatGPT 3.5">ChatGPT 3.5</MenuItem>
+              <MenuItem value="claude3.5">Claude3.5</MenuItem>
+              <MenuItem value="claude3.0">Claude3.0</MenuItem>
             </Select>
           </Toolbar>
         </AppBar>
@@ -427,7 +406,7 @@ const App = () => {
           {isWaitingForServer && (
             <Box
               sx={{
-                position: "absolute",
+                position: "fixed",
                 top: "50%",
                 left: "50%",
                 transform: "translate(-50%, -50%)",
@@ -460,9 +439,9 @@ const App = () => {
                     borderRadius: 2,
                     maxWidth: "70%",
                   }}
-                >
-                  {msg.text}
-                </Typography>
+                
+                dangerouslySetInnerHTML={{ __html: msg.text }}
+                />
               </Box>
             ) : (
               <Typography
@@ -525,16 +504,6 @@ const App = () => {
           )}
         </Box>
       </Box>
-      <Snackbar
-        open={isSnackbarOpen}
-        autoHideDuration={3000}
-        onClose={() => setSnackbarOpen(false)}
-        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
-      >
-        <Alert onClose={() => setSnackbarOpen(false)} severity="success" sx={{ width: '100%' }}>
-          WebSocket connection established
-        </Alert>
-      </Snackbar>
       <Snackbar
         open={isAlertOpen}
         autoHideDuration={3000}
