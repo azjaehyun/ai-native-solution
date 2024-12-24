@@ -194,3 +194,7 @@ def lambda_handler(event, context):
                 'error': str(e)
             })
         }
+
+
+
+# Error processing chunk 1: An error occurred (ValidationException) when calling the InvokeModel operation: prompt must start with "
