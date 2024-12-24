@@ -80,6 +80,8 @@ const App = () => {
         fileContent = await getBase64(file);
       }
 
+      console.log("file : ",file);
+
       const response = await axios.post('https://x4v4n6sd92.execute-api.ap-northeast-2.amazonaws.com/prd/poc-type-a',
          { message , chatHistoryMessage , model , fileContent}
       );
@@ -115,6 +117,8 @@ const App = () => {
     setCurrentChat((prevChat) => [...prevChat, { sender: "user", text: newUserMessage }]);
     setInputText("");
     setIsWaitingForServer(true);
+
+    console.log("handleSend.selectedFile",selectedFile);
   
     const serverMessage = await sendMessageToServer(newUserMessage, chatHistory[selectedChatIndex], selectedModel, selectedFile);
     setCurrentChat((prevChat) => [...prevChat, { sender: "server", text: serverMessage }]);
@@ -170,7 +174,9 @@ const App = () => {
   };
 
   const handleFileUpload = (e) => {
+
     const file = e.target.files[0];
+    console.log("handleFileUpload.file",file.name);
     if (file) {
       setUploadedFile(file);
       setUploadProgress(0);
