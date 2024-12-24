@@ -52,7 +52,6 @@ const App = () => {
   const [chatHistory, setChatHistory] = useState([]);
   const controllerRef = useRef(null);
   const chatBoxRef = useRef(null);
-  const [selectedFile, setSelectedFile] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadedFile, setUploadedFile] = useState(null);
 
@@ -69,19 +68,22 @@ const App = () => {
     }
   }, [currentChat]);
 
+
+
   const sendMessageToServer = async (message,chatHistory,model,file) => {
     try {
       console.log("message", message);
       const chatHistoryMessage = chatHistory ? chatHistory.messages : [];
       console.log("chatHistoryMessage", chatHistoryMessage);
 
+      console.log("file : ",file);
+
       let fileContent = null;
       if (file) {
         fileContent = await getBase64(file);
       }
 
-      console.log("file : ",file);
-
+      console.log("getBase64 file : ",file);
       const response = await axios.post('https://x4v4n6sd92.execute-api.ap-northeast-2.amazonaws.com/prd/poc-type-a',
          { message , chatHistoryMessage , model , fileContent}
       );
@@ -92,17 +94,6 @@ const App = () => {
       console.error('Error sending message to server:', error);
       return 'Error: Unable to send message to server';
     }
-  };
-
-
-
-  const getBase64 = (file) => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = () => resolve(reader.result.split(',')[1]);
-      reader.onerror = (error) => reject(error);
-    });
   };
 
   const handleSend = async () => {
@@ -118,9 +109,8 @@ const App = () => {
     setInputText("");
     setIsWaitingForServer(true);
 
-    console.log("handleSend.selectedFile",selectedFile);
   
-    const serverMessage = await sendMessageToServer(newUserMessage, chatHistory[selectedChatIndex], selectedModel, selectedFile);
+    const serverMessage = await sendMessageToServer(newUserMessage, chatHistory[selectedChatIndex], selectedModel, uploadedFile);
     setCurrentChat((prevChat) => [...prevChat, { sender: "server", text: serverMessage }]);
     setIsWaitingForServer(false);
   
@@ -162,8 +152,32 @@ const App = () => {
     });
   
     // 파일 전송 후 파일 상태 초기화
-    setSelectedFile(null);
+    setUploadedFile(null);
   };
+
+
+  const getBase64 = (file) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => {
+        try {
+          const base64String = reader.result.split(',')[1];
+          console.log("base64String : ",base64String)
+          resolve(base64String);
+        } catch (error) {
+          console.error('Error processing file:', error);
+          reject('Error processing file');
+        }
+      };
+      reader.onerror = (error) => {
+        console.error('Error reading file:', error);
+        reject('Error reading file');
+      };
+    });
+  };
+
+
 
 
   const handleKeyPress = (event) => {
@@ -176,7 +190,7 @@ const App = () => {
   const handleFileUpload = (e) => {
 
     const file = e.target.files[0];
-    console.log("handleFileUpload.file",file.name);
+    console.log("handleFileUpload.file",file);
     if (file) {
       setUploadedFile(file);
       setUploadProgress(0);
