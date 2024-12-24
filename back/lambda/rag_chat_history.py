@@ -1,5 +1,10 @@
 import boto3
 import json
+import sys
+
+import faiss
+import numpy as np
+from typing import List
 
 # Bedrock 클라이언트 생성
 bedrock_agent_runtime = boto3.client(
@@ -33,12 +38,17 @@ def lambda_handler(event, context):
         else:
             raise ValueError(f"Unsupported model selected: {selectedModel}")
 
+
+        print(f"LLM selectedModel: {selectedModel}")
+
+
         prompt_template = {
             "system_prompt": "당신은 AWS Bedrock 모델로서 사용자의 질문에 정중하고 정확하게 답변해야 합니다.",
             "context": {
-                "goal": "사용자의 질문에 대해 가장 정확하고 관련 있는 정보를 제공하는 것입니다."
+                "goal": "사용자의 질문에 대해 가장 정확하고 관련 있는 정보를 제공하는 것입니다. 불필요한 대화는 최대한 자제해 주세요."
             },
             "instructions": {
+                "conversation": "sender 키의 'user'는 사용자, 'server'는 AWS Bedrock 모델입니다.",
                 "user": "질문을 명확히 하세요. 배경 정보가 있으면 제공하세요.",
                 "server": "사용자의 질문에 명확하고 간결하게 답변하세요. 관련 정보가 없을 경우 솔직히 설명하세요."
             },
@@ -51,7 +61,7 @@ def lambda_handler(event, context):
             "role": "user",
             "content": new_message
         })
-        print(json.dumps(updated_template, indent=4, ensure_ascii=False))
+        print(json.dumps(updated_template))
 
         # Bedrock API 호출
         response = bedrock_agent_runtime.retrieve_and_generate(

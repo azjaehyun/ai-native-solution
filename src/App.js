@@ -29,6 +29,9 @@ import NoteAddIcon from "@mui/icons-material/LocalHospital";
 import SmartToyTwoToneIcon from "@mui/icons-material/SmartToyTwoTone";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import { getChatHistory, saveChatHistory } from './indexdb/indexedDB';
+import LinearProgress from '@mui/material/LinearProgress';
+import AttachFileIcon from '@mui/icons-material/AttachFile';
+import CancelIcon from '@mui/icons-material/Cancel';
 import axios from 'axios';
 
 const App = () => {
@@ -49,7 +52,9 @@ const App = () => {
   const [chatHistory, setChatHistory] = useState([]);
   const controllerRef = useRef(null);
   const chatBoxRef = useRef(null);
-  
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadedFile, setUploadedFile] = useState(null);
 
   const chatHistoryLimit = 5;
 
@@ -64,13 +69,19 @@ const App = () => {
     }
   }, [currentChat]);
 
-  const sendMessageToServer = async (message,chatHistory,model) => {
+  const sendMessageToServer = async (message,chatHistory,model,file) => {
     try {
       console.log("message", message);
       const chatHistoryMessage = chatHistory ? chatHistory.messages : [];
       console.log("chatHistoryMessage", chatHistoryMessage);
+
+      let fileContent = null;
+      if (file) {
+        fileContent = await getBase64(file);
+      }
+
       const response = await axios.post('https://x4v4n6sd92.execute-api.ap-northeast-2.amazonaws.com/prd/poc-type-a',
-         { message , chatHistoryMessage , model }
+         { message , chatHistoryMessage , model , fileContent}
       );
       const responseData = response.data;
       console.log("responseData", responseData.resultData.message);
@@ -82,23 +93,33 @@ const App = () => {
   };
 
 
+
+  const getBase64 = (file) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => resolve(reader.result.split(',')[1]);
+      reader.onerror = (error) => reject(error);
+    });
+  };
+
   const handleSend = async () => {
     if (!inputText.trim() || isWaitingForServer) return;
-
+  
     if (selectedChatIndex === null && chatHistory.length >= chatHistoryLimit) {
       setAlertOpen(true);
       return;
     }
-
+  
     const newUserMessage = inputText;
     setCurrentChat((prevChat) => [...prevChat, { sender: "user", text: newUserMessage }]);
     setInputText("");
     setIsWaitingForServer(true);
-    
-    const serverMessage = await sendMessageToServer(newUserMessage,chatHistory[selectedChatIndex],selectedModel);
+  
+    const serverMessage = await sendMessageToServer(newUserMessage, chatHistory[selectedChatIndex], selectedModel, selectedFile);
     setCurrentChat((prevChat) => [...prevChat, { sender: "server", text: serverMessage }]);
     setIsWaitingForServer(false);
-
+  
     setChatHistory((prevHistory) => {
       if (selectedChatIndex === null) {
         const newChatIndex = prevHistory.length;
@@ -112,7 +133,7 @@ const App = () => {
             { sender: "server", text: serverMessage }
           ],
         };
-
+  
         setSelectedChatIndex(newChatIndex);
         saveChatHistory([...prevHistory, newChat]);
         return [...prevHistory, newChat];
@@ -130,11 +151,14 @@ const App = () => {
           }
           return chat;
         });
-
+  
         saveChatHistory(updatedHistory);
         return updatedHistory;
       }
     });
+  
+    // 파일 전송 후 파일 상태 초기화
+    setSelectedFile(null);
   };
 
 
@@ -145,10 +169,22 @@ const App = () => {
     }
   };
 
-  const handleFileUpload = (event) => {
-    const file = event.target.files[0];
+  const handleFileUpload = (e) => {
+    const file = e.target.files[0];
     if (file) {
-      alert(`파일 업로드: ${file.name}`);
+      setUploadedFile(file);
+      setUploadProgress(0);
+
+      // Simulate file upload progress
+      const interval = setInterval(() => {
+        setUploadProgress((prevProgress) => {
+          if (prevProgress >= 100) {
+            clearInterval(interval);
+            return 100;
+          }
+          return prevProgress + 10;
+        });
+      }, 200);
     }
   };
 
@@ -224,6 +260,13 @@ const App = () => {
       setIsWaitingForServer(false);
     }
   };
+
+  const handleCancelUpload = () => {
+    setUploadedFile(null);
+    setUploadProgress(0);
+  };
+
+
 
   const sortedChatHistory = [...chatHistory].sort((a, b) => new Date(b.date) - new Date(a.date));
 
@@ -463,7 +506,16 @@ const App = () => {
           )}
         </Box>
 
+       
+        <Box>
+    
+           {uploadProgress > 0 && uploadProgress < 100 && (
+              <LinearProgress variant="determinate" value={uploadProgress} sx={{ mt: 1 }} />
+          )}
+        </Box>
+      
         <Box sx={{ display: "flex", alignItems: "center", p: 1 }}>
+    
           <TextField
             variant="outlined"
             fullWidth
@@ -491,8 +543,17 @@ const App = () => {
                   </IconButton>
                 </>
               ),
+              startAdornment: uploadedFile && (
+                <div style={{ display: 'flex', alignItems: 'center' }}>
+                  <AttachFileIcon sx={{ mr: 0.5 }} />
+                  <IconButton onClick={handleCancelUpload} sx={{ ml: 0 }}>
+                    <CancelIcon />
+                  </IconButton>
+                </div>
+              ),
             }}
           />
+      
           {isWaitingForServer && (
             <IconButton onClick={handleStopRequest} sx={{ ml: 1 }}>
               <img
