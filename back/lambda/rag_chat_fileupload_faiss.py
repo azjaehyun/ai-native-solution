@@ -25,37 +25,27 @@ def generate_embeddings(text: List[str], model_id: str) -> List[np.ndarray]:
     for i, chunk in enumerate(text):
         try:
             print(f"[{i + 1}/{len(text)}] Processing chunk: {chunk[:50]}...")
-            
+
             cleaned_chunk = chunk.replace('"', '\\"').strip()
             if not cleaned_chunk:
                 print(f"Skipping empty or invalid chunk at index {i}.")
                 continue
-            
-            # 시스템 프롬프트와 함께 `prompt` 생성
-            system_prompt = "You are an AI assistant that generates embeddings."
-            formatted_prompt = f"{system_prompt}\nHuman: {cleaned_chunk}\nAssistant:"  # 시스템 프롬프트 추가
 
-            print(f"system_prompt: {system_prompt}")
-            print(f"formatted_prompt: {formatted_prompt}")
-            # 요청 데이터를 body에 포함
-            body = {
-                "prompt": f'"{formatted_prompt}"',  # 모델이 요구하는 필수 키
-                "max_tokens_to_sample": 200  # 생성 제한
+            payload = {
+                "inputText": cleaned_chunk
             }
 
-            # Bedrock invoke_model 호출
             response = bedrock_runtime.invoke_model(
                 modelId=model_id,
                 contentType='application/json',
                 accept='application/json',
-                body=json.dumps(body)  # JSON 직렬화된 body 전달
+                body=json.dumps(payload)
             )
 
-            # 응답 처리
             response_body = json.loads(response['body'].read())
             if 'embedding' not in response_body:
                 raise ValueError("Response does not contain 'embedding' field.")
-            
+
             embedding = np.array(response_body['embedding'], dtype=np.float32)
             embeddings.append(embedding)
             print(f"Chunk {i + 1} processed successfully.")
@@ -80,7 +70,7 @@ def retrieve_relevant_chunks(query: str, faiss_index: faiss.IndexFlatL2, texts: 
     """질문과 관련된 텍스트 청크 검색."""
     print(f"Retrieving relevant chunks for query: {query}")
     query_embedding = generate_embeddings([query], model_id=model_id)[0]
-    distances, indices = faiss_index.search(np.array([query_embedding]), top_k)
+    distances, indices = faiss_index.search(np.array([query_embedding], dtype=np.float32), top_k)
     print(f"Retrieved indices: {indices[0]}, distances: {distances[0]}")
     return [texts[i] for i in indices[0] if i < len(texts)]
 
@@ -100,7 +90,7 @@ def lambda_handler(event, context):
             print("Decoding base64 file content...")
             file_content = base64.b64decode(file_content_base64)
 
-        embedding_model_id = 'anthropic.claude-3-5-sonnet-20240620-v1:0'
+        embedding_model_id = 'amazon.titan-embed-text-v2:0'
         kbId = 'ZXCWNTBUPU'
 
         if selectedModel == 'claude3.5':
@@ -172,4 +162,3 @@ def lambda_handler(event, context):
                 'error': str(e)
             })
         }
-        

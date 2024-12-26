@@ -153,6 +153,7 @@ const App = () => {
   
     // 파일 전송 후 파일 상태 초기화
     setUploadedFile(null);
+    setUploadProgress(0);
   };
 
 
@@ -190,6 +191,12 @@ const App = () => {
   const handleFileUpload = (e) => {
 
     const file = e.target.files[0];
+
+    if(!file) return;
+
+    // 같은 파일 재 업로드 시에도 onchage 이벤트 트리거 되도록 초기화
+    e.target.value = null;
+
     console.log("handleFileUpload.file",file);
     if (file) {
       setUploadedFile(file);
@@ -529,9 +536,9 @@ const App = () => {
        
         <Box>
     
-           {uploadProgress > 0 && uploadProgress < 100 && (
-              <LinearProgress variant="determinate" value={uploadProgress} sx={{ mt: 1 }} />
-          )}
+        {uploadProgress > 0 && uploadProgress < 100 && (
+          <LinearProgress variant="determinate" value={uploadProgress} sx={{ mt: 1, width: '100%' }} />
+        )}
         </Box>
       
         <Box sx={{ display: "flex", alignItems: "center", p: 1 }}>
@@ -567,7 +574,9 @@ const App = () => {
               ),
               startAdornment: uploadedFile && (
                 <div style={{ display: 'flex', alignItems: 'center' }}>
-                  <AttachFileIcon sx={{ mr: 0.5 }} />
+                  <Tooltip title={uploadedFile.name}>
+                    <AttachFileIcon sx={{ mr: 0.5 }} />
+                  </Tooltip>
                   <IconButton onClick={handleCancelUpload} sx={{ ml: 0 }}>
                     <CancelIcon />
                   </IconButton>
