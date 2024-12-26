@@ -24,9 +24,7 @@ try:
 except ImportError:
     pass
 
-
 # Bedrock 클라이언트 생성
-# 해당 코딩 가이드 문서 : https://chatgpt.com/share/676cae6b-a1b8-8011-9cb9-121cd0ae8ee0
 bedrock_agent_runtime = boto3.client(
     service_name="bedrock-agent-runtime",
     region_name="ap-northeast-2"  # 실제 사용하는 리전으로 변경
@@ -45,6 +43,7 @@ def dynamic_chunk_text(
       - "paragraph": \n\n 기반 문단 분리 후, 길면 슬라이딩 윈도우
       - "sentence": 마침표/물음표/느낌표를 기준으로 문장 분리 후, 길면 슬라이딩 윈도우
       - "fixed": 일정 크기(chunk_size)로 고정 분할
+      - "token": (간단히) 공백 기반 단어 개수를 세어 chunk_size 단위로 분할 (Naive)
     """
     text = text.strip()
     if not text:
@@ -59,7 +58,7 @@ def dynamic_chunk_text(
                 if para:
                     chunks.append(para)
             else:
-                # 슬라이딩 윈도우
+                # 슬라이딩 윈도우 (문자 길이 기준)
                 start = 0
                 while start < len(para):
                     end = start + chunk_size
@@ -87,8 +86,23 @@ def dynamic_chunk_text(
                     start += max(chunk_size - overlap_size, 1)
         return chunks
 
+    elif strategy == "token":
+        # 여기서는 간단히 '공백' 기준으로 단어를 나눈 뒤,
+        # chunk_size 개수만큼씩 묶어서 하나의 청크로 만든 예시
+        # 실제 LLM 토큰 기준이 아님에 주의.
+        words = text.split()
+        chunks = []
+        start_idx = 0
+        while start_idx < len(words):
+            end_idx = start_idx + chunk_size
+            chunk_words = words[start_idx:end_idx]
+            chunk = " ".join(chunk_words)
+            chunks.append(chunk)
+            start_idx += max(chunk_size - overlap_size, 1)
+        return chunks
+
     else:
-        # "fixed"
+        # "fixed" (문자 기반 고정 길이)
         chunks = []
         start = 0
         while start < len(text):
@@ -97,50 +111,6 @@ def dynamic_chunk_text(
             chunks.append(chunk)
             start += chunk_size
         return chunks
-
-
-def chunk_excel(
-    file_bytes: bytes,
-    chunk_size: int = 500,
-    overlap_size: int = 50
-) -> List[str]:
-    """
-    Excel 파일을 시트(탭) → 행(Row) 순으로 순회 후,
-    각 행을 문자열로 연결해 한 덩어리로 만들고,
-    너무 길면 슬라이딩 윈도우(chunk_size/overlap_size)로 분할.
-    """
-    chunks = []
-    try:
-        wb = load_workbook(filename=BytesIO(file_bytes), read_only=True, data_only=True)
-    except Exception as e:
-        print(f"Error loading Excel: {e}")
-        return []
-
-    for sheet_name in wb.sheetnames:
-        sheet = wb[sheet_name]
-        print(f"Processing sheet: {sheet_name}")
-        for row in sheet.iter_rows(values_only=True):
-            # 행 데이터를 문자열로 변환 (None은 빈 문자열로 처리)
-            row_str_list = [str(cell) if cell is not None else '' for cell in row]
-            row_text = " | ".join(row_str_list).strip()
-
-            if not row_text:
-                continue
-
-            if len(row_text) <= chunk_size:
-                # 시트 정보 + 내용
-                chunks.append(f"[Sheet: {sheet_name}] {row_text}")
-            else:
-                # 슬라이딩 윈도우
-                start = 0
-                while start < len(row_text):
-                    end = start + chunk_size
-                    chunk = row_text[start:end]
-                    chunks.append(f"[Sheet: {sheet_name}] {chunk}")
-                    start += max(chunk_size - overlap_size, 1)
-
-    wb.close()
-    return chunks
 
 
 def chunk_word(
@@ -159,7 +129,6 @@ def chunk_word(
         print(f"Error loading Word docx: {e}")
         return []
 
-    # 각 문단(paragraph)에 대해
     for i, para in enumerate(doc.paragraphs):
         text = para.text.strip()
         if not text:
@@ -174,6 +143,74 @@ def chunk_word(
                 chunk = text[start:end]
                 chunks.append(f"[Paragraph {i+1}] {chunk}")
                 start += max(chunk_size - overlap_size, 1)
+
+    return chunks
+
+def chunk_word_heading(
+    file_bytes: bytes,
+    chunk_size: int = 500,
+    overlap_size: int = 50
+) -> List[str]:
+    """
+    Word(.docx) 파일에서 Heading(헤딩) 스타일을 기준으로 분할하는 예시.
+    - Heading 스타일 감지: paragraph.style.name 안에 'Heading'이 있는지 확인 (Naive)
+    - Heading에서 Heading까지를 하나의 청크로 묶음
+    - 각 청크가 너무 길면 슬라이딩 윈도우로 분할
+    """
+    chunks = []
+    try:
+        doc = Document(BytesIO(file_bytes))
+    except Exception as e:
+        print(f"Error loading Word docx: {e}")
+        return []
+
+    all_paragraphs = doc.paragraphs
+    current_heading = None
+    current_text_buffer = []
+
+    def flush_chunk(heading, text_buffer):
+        """
+        내부 함수: heading + buffer를 하나의 chunk로 만들고,
+        chunk_size 초과 시 슬라이딩 윈도우
+        """
+        if not text_buffer:
+            return []
+        combined_text = f"[Heading: {heading}] " + "\n".join(text_buffer)
+        if len(combined_text) <= chunk_size:
+            return [combined_text]
+        else:
+            # 슬라이딩 윈도우
+            splitted_chunks = []
+            start = 0
+            while start < len(combined_text):
+                end = start + chunk_size
+                chunk_part = combined_text[start:end]
+                splitted_chunks.append(chunk_part)
+                start += max(chunk_size - overlap_size, 1)
+            return splitted_chunks
+
+    for para in all_paragraphs:
+        style_name = getattr(para.style, 'name', '') or ''
+        text = para.text.strip()
+        # Heading 스타일 감지
+        if 'Heading' in style_name:
+            # 이전 버퍼가 있으면 먼저 flush
+            if current_heading or current_text_buffer:
+                chunks.extend(flush_chunk(current_heading, current_text_buffer))
+            # 새 Heading 시작
+            current_heading = text
+            current_text_buffer = []
+        else:
+            if not current_heading:
+                # Heading 없이 시작된 문단은 "Unknown Heading" 처리
+                current_heading = "No Heading"
+            # 현재 Heading 하에 문단 추가
+            if text:
+                current_text_buffer.append(text)
+
+    # 마지막 버퍼 flush
+    if current_heading or current_text_buffer:
+        chunks.extend(flush_chunk(current_heading, current_text_buffer))
 
     return chunks
 
@@ -203,7 +240,6 @@ def chunk_pdf(
         if not text:
             continue
 
-        # 페이지별 텍스트 슬라이딩 윈도우
         if len(text) <= chunk_size:
             chunks.append(f"[Page {page_index+1}] {text}")
         else:
@@ -214,6 +250,96 @@ def chunk_pdf(
                 chunks.append(f"[Page {page_index+1}] {chunk}")
                 start += max(chunk_size - overlap_size, 1)
 
+    return chunks
+
+
+def chunk_excel(
+    file_bytes: bytes,
+    chunk_size: int = 500,
+    overlap_size: int = 50
+) -> List[str]:
+    """
+    Excel 파일을 시트(탭) → 행(Row) 순으로 순회 후,
+    각 행을 문자열로 연결해 한 덩어리로 만들고,
+    너무 길면 슬라이딩 윈도우(chunk_size/overlap_size)로 분할.
+    """
+    chunks = []
+    try:
+        wb = load_workbook(filename=BytesIO(file_bytes), read_only=True, data_only=True)
+    except Exception as e:
+        print(f"Error loading Excel: {e}")
+        return []
+
+    for sheet_name in wb.sheetnames:
+        sheet = wb[sheet_name]
+        print(f"Processing sheet: {sheet_name}")
+        for row in sheet.iter_rows(values_only=True):
+            row_str_list = [str(cell) if cell is not None else '' for cell in row]
+            row_text = " | ".join(row_str_list).strip()
+
+            if not row_text:
+                continue
+
+            if len(row_text) <= chunk_size:
+                chunks.append(f"[Sheet: {sheet_name}] {row_text}")
+            else:
+                start = 0
+                while start < len(row_text):
+                    end = start + chunk_size
+                    chunk = row_text[start:end]
+                    chunks.append(f"[Sheet: {sheet_name}] {chunk}")
+                    start += max(chunk_size - overlap_size, 1)
+    wb.close()
+    return chunks
+
+
+def chunk_excel_domain_based(
+    file_bytes: bytes,
+    category_col: int = 0
+) -> List[str]:
+    """
+    Excel에서 '카테고리·속성(도메인 기반)'으로 묶는 간단 예시.
+    
+    - category_col(0-based): 특정 열이 "카테고리"라고 가정
+    - 동일 카테고리 값인 행들을 모아서 한 덩어리로 만든 뒤, return
+    
+    (문자/토큰 길이 기반 슬라이딩 윈도우는 생략, 도메인별로 chunk를 합침)
+    """
+    chunks = []
+    try:
+        wb = load_workbook(filename=BytesIO(file_bytes), read_only=True, data_only=True)
+    except Exception as e:
+        print(f"Error loading Excel for domain chunking: {e}")
+        return []
+
+    for sheet_name in wb.sheetnames:
+        sheet = wb[sheet_name]
+        print(f"[Domain-based] Processing sheet: {sheet_name}")
+        
+        # 카테고리 값 -> 해당 행들의 리스트
+        category_map = {}
+
+        for row in sheet.iter_rows(values_only=True):
+            if not row or all(cell is None for cell in row):
+                continue
+
+            cat_val = row[category_col] if category_col < len(row) else None
+            cat_val = str(cat_val) if cat_val is not None else "UnknownCategory"
+
+            row_str_list = [str(cell) if cell is not None else '' for cell in row]
+            row_text = " | ".join(row_str_list).strip()
+
+            if cat_val not in category_map:
+                category_map[cat_val] = []
+            category_map[cat_val].append(row_text)
+
+        # category_map 에는 {카테고리: [행1, 행2, ...]} 형태
+        # 각 카테고리별로 한 개의 chunk 로 만들기
+        for cat_val, rows in category_map.items():
+            chunk_text = f"[Sheet: {sheet_name} / Category: {cat_val}]\n" + "\n".join(rows)
+            chunks.append(chunk_text)
+
+    wb.close()
     return chunks
 
 
@@ -238,26 +364,49 @@ def read_and_chunk_file(
     filename: str,
     chunk_strategy: str,
     chunk_size: int,
-    overlap_size: int
+    overlap_size: int,
+    # 추가: domain-based 등에 필요한 옵션들
+    category_col: int = 0
 ) -> List[str]:
     """
     파일 확장자(또는 chunkStrategy)에 따라
     Word/Excel/PDF/일반 텍스트로 분기하여 텍스트 추출 + 청킹.
+    
+    - "heading": Word 문서에서 Heading 기반
+    - "domain": Excel에서 특정 열(column) 기반으로 도메인별 청킹
+    - "token": 단순 공백 분리(naive token) 기반 (dynamic_chunk_text)
     """
     file_type = detect_file_type(filename)
     print(f"Detected file type: {file_type}")
 
-    if file_type == 'excel':
-        return chunk_excel(file_bytes, chunk_size, overlap_size)
-    elif file_type == 'word':
-        return chunk_word(file_bytes, chunk_size, overlap_size)
+    # Word
+    if file_type == 'word':
+        if chunk_strategy == "heading":
+            # Word Heading 기반 청킹
+            return chunk_word_heading(file_bytes, chunk_size, overlap_size)
+        else:
+            # 기본 Word 문단 기반 청킹
+            return chunk_word(file_bytes, chunk_size, overlap_size)
+
+    # Excel
+    elif file_type == 'excel':
+        if chunk_strategy == "domain":
+            # 카테고리·속성 기반 청킹
+            return chunk_excel_domain_based(file_bytes, category_col=category_col)
+        else:
+            # 기본 행(Row) 기반 청킹
+            return chunk_excel(file_bytes, chunk_size, overlap_size)
+
+    # PDF
     elif file_type == 'pdf':
         return chunk_pdf(file_bytes, chunk_size, overlap_size)
+
+    # 일반 텍스트
     else:
-        # 그 외는 일반 텍스트로 간주 → dynamic_chunk_text
         decoded_text = file_bytes.decode('utf-8', errors='ignore')
         return dynamic_chunk_text(decoded_text, strategy=chunk_strategy,
                                   chunk_size=chunk_size, overlap_size=overlap_size)
+
 
 def generate_embeddings(text: List[str], model_id: str) -> List[np.ndarray]:
     """Amazon Bedrock의 invoke_model API를 사용하여 텍스트 임베딩 생성."""
@@ -344,9 +493,12 @@ def lambda_handler(event, context):
             print(f"overlapSize not provided. Using 10% of maxChunkSize => {overlap_size}")
         else:
             overlap_size = body['overlapSize']
+
+        # Excel 도메인(카테고리) 기반 청킹에 쓰일 열 인덱스 (예시)
+        category_col = body.get('categoryCol', 0)
         # -------------------------------------------------------------------------------------
 
-        print(f"chunkStrategy={chunk_strategy}, maxChunkSize={max_chunk_size}, overlapSize={overlap_size}")
+        print(f"chunkStrategy={chunk_strategy}, maxChunkSize={max_chunk_size}, overlapSize={overlap_size}, categoryCol={category_col}")
 
         file_content = None
         if file_content_base64:
@@ -375,7 +527,8 @@ def lambda_handler(event, context):
                 filename=filename,
                 chunk_strategy=chunk_strategy,
                 chunk_size=max_chunk_size,
-                overlap_size=overlap_size
+                overlap_size=overlap_size,
+                category_col=category_col
             )
 
             print(f"Total chunks created: {len(text_chunks)}")
