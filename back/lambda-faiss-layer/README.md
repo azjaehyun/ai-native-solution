@@ -15,14 +15,15 @@ zip -r faiss-layer.zip python
 
 ## cloudshell 환경에서 아래 명령어 실행. - pdf , word , execl 계층 모듈 추가
 ```
-mkdir my_lambda_layer
-cd my_lambda_layer
+mkdir faiss_chunk
+cd faiss_chunk
 python3.9 -m venv venv
 source venv/bin/activate
 pip install openpyxl PyPDF2 python-docx
 mkdir -p python/lib/python3.9/site-packages
 cp -r venv/lib/python3.9/site-packages/* python/lib/python3.9/site-packages/
 cp -r venv/lib/python3.9/site-packages/.[^.]* python/lib/python3.9/site-packages/
-zip -r my_lambda_layer.zip python
-aws lambda publish-layer-version --layer-name myPythonLayer --zip-file fileb://my_lambda_layer.zip --compatible-runtimes python3.9
+zip -r faiss_chunk.zip python
+aws lambda publish-layer-version --layer-name myPythonLayer --zip-file fileb://faiss_chunk.zip --compatible-runtimes python3.9
 ```
+

@@ -30,6 +30,7 @@ bedrock_agent_runtime = boto3.client(
     region_name="ap-northeast-2"  # 실제 사용하는 리전으로 변경
 )
 
+
 def dynamic_chunk_text(
     text: str,
     strategy: str = "fixed",
@@ -89,7 +90,6 @@ def dynamic_chunk_text(
     elif strategy == "token":
         # 여기서는 간단히 '공백' 기준으로 단어를 나눈 뒤,
         # chunk_size 개수만큼씩 묶어서 하나의 청크로 만든 예시
-        # 실제 LLM 토큰 기준이 아님에 주의.
         words = text.split()
         chunks = []
         start_idx = 0
@@ -179,7 +179,6 @@ def chunk_word_heading(
         if len(combined_text) <= chunk_size:
             return [combined_text]
         else:
-            # 슬라이딩 윈도우
             splitted_chunks = []
             start = 0
             while start < len(combined_text):
@@ -365,7 +364,6 @@ def read_and_chunk_file(
     chunk_strategy: str,
     chunk_size: int,
     overlap_size: int,
-    # 추가: domain-based 등에 필요한 옵션들
     category_col: int = 0
 ) -> List[str]:
     """
@@ -382,19 +380,15 @@ def read_and_chunk_file(
     # Word
     if file_type == 'word':
         if chunk_strategy == "heading":
-            # Word Heading 기반 청킹
             return chunk_word_heading(file_bytes, chunk_size, overlap_size)
         else:
-            # 기본 Word 문단 기반 청킹
             return chunk_word(file_bytes, chunk_size, overlap_size)
 
     # Excel
     elif file_type == 'excel':
         if chunk_strategy == "domain":
-            # 카테고리·속성 기반 청킹
             return chunk_excel_domain_based(file_bytes, category_col=category_col)
         else:
-            # 기본 행(Row) 기반 청킹
             return chunk_excel(file_bytes, chunk_size, overlap_size)
 
     # PDF
@@ -416,9 +410,7 @@ def generate_embeddings(text: List[str], model_id: str) -> List[np.ndarray]:
 
     for i, chunk in enumerate(text):
         try:
-            # 필요한 경우 chunk의 길이 체크 및 전처리
             print(f"[{i + 1}/{len(text)}] Processing chunk: {chunk[:50]}...")
-
             cleaned_chunk = chunk.replace('"', '\\"').strip()
             if not cleaned_chunk:
                 print(f"Skipping empty or invalid chunk at index {i}.")
@@ -476,34 +468,26 @@ def lambda_handler(event, context):
         body = json.loads(event.get('body', '{}'))
         print("Request body:", body)
 
+        # fileContent (Base64) 여부 확인
         file_content_base64 = body.get('fileContent', None)
-        filename = body.get('fileName', 'uploaded.file')  # 실제 파일 이름
+        filename = body.get('fileName', 'default.md')  # 실제 파일 이름
         new_message = body.get('message', '스노우플레이크 문제 한개만 객관식으로 만들어줘')
         history = body.get('chatHistoryMessage', [])
         selectedModel = body.get('selectedModel', 'claude3.5')
 
-        # -------------------------------------------------------------------------------------
-        # 동적 청킹 관련 파라미터
+        # ------------------ 동적 청킹 관련 파라미터 ------------------
         chunk_strategy = body.get('chunkStrategy', 'fixed')
         max_chunk_size = body.get('maxChunkSize', 500)
-        
-        # overlapSize가 주어지지 않았다면, maxChunkSize의 10%를 디폴트로 설정
         if 'overlapSize' not in body or body['overlapSize'] is None:
             overlap_size = int(max_chunk_size * 0.1)
             print(f"overlapSize not provided. Using 10% of maxChunkSize => {overlap_size}")
         else:
             overlap_size = body['overlapSize']
 
-        # Excel 도메인(카테고리) 기반 청킹에 쓰일 열 인덱스 (예시)
         category_col = body.get('categoryCol', 0)
-        # -------------------------------------------------------------------------------------
+        # ----------------------------------------------------------
 
         print(f"chunkStrategy={chunk_strategy}, maxChunkSize={max_chunk_size}, overlapSize={overlap_size}, categoryCol={category_col}")
-
-        file_content = None
-        if file_content_base64:
-            print("Decoding base64 file content...")
-            file_content = base64.b64decode(file_content_base64)
 
         embedding_model_id = 'amazon.titan-embed-text-v2:0'
         kbId = 'ZXCWNTBUPU'
@@ -517,10 +501,16 @@ def lambda_handler(event, context):
             raise ValueError(f"Unsupported model selected: {selectedModel}")
 
         print(f"Selected model ARN: {modelArn}")
-        relevant_chunks = []
+        relevant_chunks = []  # 기본값: 빈 리스트
 
-        # 파일이 존재하면 파일 확장자(혹은 chunkStrategy)에 따라 구분하여 텍스트+청킹 수행
-        if file_content:
+        # fileContent가 있으면 Base64 디코딩 + 청킹/임베딩/검색까지 진행
+        if file_content_base64:
+            try:
+                file_content = base64.b64decode(file_content_base64)
+            except Exception as e:
+                raise ValueError(f"Error decoding base64 file content: {str(e)}")
+
+            # 청킹
             print("Processing uploaded file...")
             text_chunks = read_and_chunk_file(
                 file_bytes=file_content,
@@ -532,13 +522,14 @@ def lambda_handler(event, context):
             )
 
             print(f"Total chunks created: {len(text_chunks)}")
+
+            # 파일에서 얻은 청크가 있다면 임베딩 + 검색
             if text_chunks:
-                # 임베딩 & FAISS 인덱스 생성
                 embeddings = generate_embeddings(text_chunks, embedding_model_id)
                 faiss_index = create_faiss_index(embeddings)
-
-                # 사용자 질문(new_message)에 대해 관련 청크 검색
                 relevant_chunks = retrieve_relevant_chunks(new_message, faiss_index, text_chunks, embedding_model_id)
+        else:
+            print("No fileContent provided. Skipping file chunking and retrieval steps.")
 
         # 최종 모델에 넣을 프롬프트 템플릿 구성
         prompt_template = {

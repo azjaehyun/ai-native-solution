@@ -79,13 +79,15 @@ const App = () => {
       console.log("file : ",file);
 
       let fileContent = null;
+      let fileName = null;
       if (file) {
         fileContent = await getBase64(file);
+        fileName = file.name;
       }
 
       console.log("getBase64 file : ",file);
       const response = await axios.post('https://x4v4n6sd92.execute-api.ap-northeast-2.amazonaws.com/prd/poc-type-a',
-         { message , chatHistoryMessage , model , fileContent}
+         { message , chatHistoryMessage , model , fileContent , fileName }
       );
       const responseData = response.data;
       console.log("responseData", responseData.resultData.message);
