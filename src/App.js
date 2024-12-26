@@ -548,9 +548,11 @@ const App = () => {
               endAdornment: (
                 <>
                   <label htmlFor="file-upload">
-                    <IconButton component="span" sx={{ ml: 1 }}>
-                      <UploadFileIcon />
-                    </IconButton>
+                    <Tooltip title={uploadedFile ? uploadedFile.name : "파일 업로드"}>
+                      <IconButton component="span" sx={{ ml: 1 }}>
+                        <UploadFileIcon />
+                      </IconButton>
+                    </Tooltip>
                   </label>
                   <input
                     id="file-upload"
