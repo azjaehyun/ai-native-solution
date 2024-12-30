@@ -5,23 +5,30 @@ import numpy as np
 import base64
 from typing import List
 from io import BytesIO
+import sys
+
+
+print(sys.path)
 
 
 # (1) Word 파일 처리용 라이브러리
 try:
     from docx import Document
-except ImportError:
-    pass
+    print("docx 라이브러리 import 성공!")
+except ImportError as e:
+    print(f"docx ImportError 발생: {e}")
 
 # (2) PDF 파일 처리용 라이브러리
 try:
     import PyPDF2
+    print("PyPDF2 라이브러리 import 성공!")
 except ImportError:
     pass
 
 # (3) Excel 파일 처리용 라이브러리
 try:
     from openpyxl import load_workbook
+    print("openpyxl 라이브러리 import 성공!")
 except ImportError:
     pass
 
@@ -334,6 +341,80 @@ def detect_file_type(filename: str) -> str:
         return 'text'
 
 
+def chunk_word_full_text(
+    file_bytes: bytes,
+    chunk_size: int = 500,
+    overlap_size: int = 50
+) -> List[str]:
+    try:
+        doc = Document(BytesIO(file_bytes))
+        print("[INFO] Word document successfully loaded.")
+    except Exception as e:
+        print(f"[ERROR] Error loading Word docx: {e}")
+        return []
+
+    all_text = []
+
+    # Collect text from paragraphs
+    print("[INFO] Extracting paragraphs from the document...")
+    for i, para in enumerate(doc.paragraphs):
+        text = para.text.strip()
+        if text:
+            all_text.append(text)
+            print(f"[DEBUG] Paragraph {i + 1}: {text}")
+
+    # Include table content if any
+    print("[INFO] Extracting tables from the document...")
+    for table_idx, table in enumerate(doc.tables):
+        print(f"[DEBUG] Table {table_idx + 1} found.")
+        for row_idx, row in enumerate(table.rows):
+            row_text = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+            if row_text:
+                table_row_text = " | ".join(row_text)
+                all_text.append(table_row_text)
+                print(f"[DEBUG] Table {table_idx + 1}, Row {row_idx + 1}: {table_row_text}")
+
+    # Collect text from headers and footers if any
+    print("[INFO] Extracting headers and footers from the document...")
+    if doc.sections:
+        for section_idx, section in enumerate(doc.sections):
+            print(f"[DEBUG] Section {section_idx + 1} found.")
+            header = section.header
+            footer = section.footer
+            if header:
+                for para_idx, para in enumerate(header.paragraphs):
+                    text = para.text.strip()
+                    if text:
+                        header_text = f"[Header] {text}"
+                        all_text.append(header_text)
+                        print(f"[DEBUG] Section {section_idx + 1} Header Paragraph {para_idx + 1}: {header_text}")
+            if footer:
+                for para_idx, para in enumerate(footer.paragraphs):
+                    text = para.text.strip()
+                    if text:
+                        footer_text = f"[Footer] {text}"
+                        all_text.append(footer_text)
+                        print(f"[DEBUG] Section {section_idx + 1} Footer Paragraph {para_idx + 1}: {footer_text}")
+
+    # Combine all extracted text
+    print("[INFO] Combining all extracted text...")
+    combined_text = "\n".join(all_text)
+    print(f"[DEBUG] Combined Text Length: {len(combined_text)} characters")
+
+    # Split into chunks
+    print("[INFO] Splitting text into chunks...")
+    chunks = []
+    start = 0
+    while start < len(combined_text):
+        end = start + chunk_size
+        chunk = combined_text[start:end]
+        chunks.append(chunk)
+        print(f"[DEBUG] Chunk {len(chunks)}: {chunk[:50]}...")  # Print first 50 chars of each chunk
+        start += max(chunk_size - overlap_size, 1)
+
+    print(f"[INFO] Total Chunks Created: {len(chunks)}")
+    return chunks
+
 def read_and_chunk_file(
     file_bytes: bytes,
     filename: str,
@@ -348,6 +429,8 @@ def read_and_chunk_file(
     if file_type == 'word':
         if chunk_strategy == "heading":
             return chunk_word_heading(file_bytes, chunk_size, overlap_size)
+        elif chunk_strategy == "full_text":  # 추가된 옵션
+            return chunk_word_full_text(file_bytes, chunk_size, overlap_size)
         else:
             return chunk_word(file_bytes, chunk_size, overlap_size)
 
@@ -436,7 +519,7 @@ def lambda_handler(event, context):
         history = body.get('chatHistoryMessage', [])
         selectedModel = body.get('selectedModel', 'claude3.5')
 
-        chunk_strategy = body.get('chunkStrategy', 'fixed')
+        chunk_strategy = body.get('chunkStrategy', 'full_text')  #  fixed
         max_chunk_size = body.get('maxChunkSize', 500)
         if 'overlapSize' not in body or body['overlapSize'] is None:
             overlap_size = int(max_chunk_size * 0.1)
