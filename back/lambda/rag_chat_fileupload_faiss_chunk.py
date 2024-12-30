@@ -418,36 +418,63 @@ def chunk_word_full_text(
 def read_and_chunk_file(
     file_bytes: bytes,
     filename: str,
-    chunk_strategy: str,
-    chunk_size: int,
-    overlap_size: int,
+    chunk_strategy: str = None,
+    chunk_size: int = 500,
+    overlap_size: int = 50,
     category_col: int = 0
 ) -> List[str]:
+    print(f"[DEBUG] Starting read_and_chunk_file with filename={filename}, chunk_strategy={chunk_strategy}, chunk_size={chunk_size}, overlap_size={overlap_size}, category_col={category_col}")
     file_type = detect_file_type(filename)
-    print(f"Detected file type: {file_type}")
+    print(f"[DEBUG] Detected file type: {file_type}")
 
     if file_type == 'word':
+        # Default strategy for Word files
+        if chunk_strategy is None:
+            chunk_strategy = "full_text"
+        print(f"[DEBUG] Using chunk_strategy={chunk_strategy} for Word file")
+
         if chunk_strategy == "heading":
             return chunk_word_heading(file_bytes, chunk_size, overlap_size)
-        elif chunk_strategy == "full_text":  # 추가된 옵션
+        elif chunk_strategy == "full_text":
             return chunk_word_full_text(file_bytes, chunk_size, overlap_size)
         else:
             return chunk_word(file_bytes, chunk_size, overlap_size)
 
     elif file_type == 'excel':
+        # Default strategy for Excel files
+        if chunk_strategy is None:
+            chunk_strategy = "domain"
+        print(f"[DEBUG] Using chunk_strategy={chunk_strategy} for Excel file")
+
         if chunk_strategy == "domain":
             return chunk_excel_domain_based(file_bytes, category_col=category_col)
         else:
             return chunk_excel(file_bytes, chunk_size, overlap_size)
 
     elif file_type == 'pdf':
-        return chunk_pdf(file_bytes, chunk_size, overlap_size)
+        # Default strategy for PDF files
+        if chunk_strategy is None:
+            chunk_strategy = "dynamic"
+        print(f"[DEBUG] Using chunk_strategy={chunk_strategy} for PDF file")
+
+        if chunk_strategy == "dynamic":
+            # Combine PDF chunking with dynamic chunking
+            text_chunks = chunk_pdf(file_bytes, chunk_size, overlap_size)
+            print(f"[DEBUG] PDF chunking produced {len(text_chunks)} chunks.")
+            combined_text = "\n".join(text_chunks)
+            return dynamic_chunk_text(combined_text, strategy="fixed", chunk_size=chunk_size, overlap_size=overlap_size)
+        else:
+            return chunk_pdf(file_bytes, chunk_size, overlap_size)
 
     else:
-        decoded_text = file_bytes.decode('utf-8', errors='ignore')
-        return dynamic_chunk_text(decoded_text, strategy=chunk_strategy,
-                                  chunk_size=chunk_size, overlap_size=overlap_size)
+        # Default strategy for plain text files
+        if chunk_strategy is None:
+            chunk_strategy = "fixed"
+        print(f"[DEBUG] Using chunk_strategy={chunk_strategy} for plain text file")
 
+        decoded_text = file_bytes.decode('utf-8', errors='ignore')
+        return dynamic_chunk_text(decoded_text, strategy=chunk_strategy, chunk_size=chunk_size, overlap_size=overlap_size)
+    
 
 def generate_embeddings(text: List[str], model_id: str) -> List[np.ndarray]:
     print(f"Generating embeddings for {len(text)} chunks using model {model_id}...")
