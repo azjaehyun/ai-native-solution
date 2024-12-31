@@ -38,7 +38,6 @@ bedrock_agent_runtime = boto3.client(
     region_name="ap-northeast-2"  # 실제 사용하는 리전으로 변경
 )
 
-
 def dynamic_chunk_text(
     text: str,
     strategy: str = "fixed",
@@ -48,8 +47,40 @@ def dynamic_chunk_text(
     text = text.strip()
     if not text:
         return []
+        
 
-    if strategy == "paragraph":
+    if strategy == "hybrid":
+        # Combine benefits of all strategies
+        import re
+        chunks = []
+
+        # Split by paragraphs
+        paragraphs = text.split('\n\n')
+        for para in paragraphs:
+            para = para.strip()
+            if len(para) <= chunk_size:
+                if para:
+                    chunks.append(para)
+            else:
+                # Further split large paragraphs by sentences
+                sentences = re.split(r'(?<=[.!?])\s+', para)
+                for sent in sentences:
+                    sent = sent.strip()
+                    if len(sent) <= chunk_size:
+                        if sent:
+                            chunks.append(sent)
+                    else:
+                        # Use sliding window for long sentences
+                        start = 0
+                        while start < len(sent):
+                            end = start + chunk_size
+                            chunk = sent[start:end]
+                            chunks.append(chunk)
+                            start += max(chunk_size - overlap_size, 1)
+
+        return chunks
+
+    elif strategy == "paragraph":
         paragraphs = text.split('\n\n')
         chunks = []
         for para in paragraphs:
@@ -85,7 +116,6 @@ def dynamic_chunk_text(
         return chunks
 
     elif strategy == "token":
-        # 간단히 공백 기준으로 나눈 뒤 chunk_size 단위로 쪼개는 예
         words = text.split()
         chunks = []
         start_idx = 0
@@ -97,8 +127,46 @@ def dynamic_chunk_text(
             start_idx += max(chunk_size - overlap_size, 1)
         return chunks
 
+    elif strategy == "sliding_window":
+        chunks = []
+        start = 0
+        while start < len(text):
+            end = start + chunk_size
+            chunk = text[start:end]
+            chunks.append(chunk)
+            start += max(chunk_size - overlap_size, 1)
+        return chunks
+
+    elif strategy == "by_section":
+        sections = text.split("\n\n\n")  # Split by large section gaps
+        chunks = []
+        for section in sections:
+            section = section.strip()
+            if len(section) <= chunk_size:
+                if section:
+                    chunks.append(section)
+            else:
+                start = 0
+                while start < len(section):
+                    end = start + chunk_size
+                    chunk = section[start:end]
+                    chunks.append(chunk)
+                    start += max(chunk_size - overlap_size, 1)
+        return chunks
+
+    elif strategy == "by_keyword":
+        keywords = ["Introduction", "Summary", "Conclusion"]  # Example keywords
+        chunks = []
+        for keyword in keywords:
+            start_idx = text.find(keyword)
+            while start_idx != -1:
+                end_idx = start_idx + chunk_size
+                chunk = text[start_idx:end_idx]
+                chunks.append(chunk)
+                start_idx = text.find(keyword, start_idx + 1)
+        return chunks
+
     else:
-        # fixed
         chunks = []
         start = 0
         while start < len(text):
@@ -454,22 +522,22 @@ def read_and_chunk_file(
     elif file_type == 'pdf':
         # Default strategy for PDF files
         if chunk_strategy is None:
-            chunk_strategy = "dynamic"
+            chunk_strategy = "hybrid"
         print(f"[DEBUG] Using chunk_strategy={chunk_strategy} for PDF file")
 
-        if chunk_strategy == "dynamic":
+        if chunk_strategy == "hybrid":
             # Combine PDF chunking with dynamic chunking
             text_chunks = chunk_pdf(file_bytes, chunk_size, overlap_size)
             print(f"[DEBUG] PDF chunking produced {len(text_chunks)} chunks.")
             combined_text = "\n".join(text_chunks)
-            return dynamic_chunk_text(combined_text, strategy="fixed", chunk_size=chunk_size, overlap_size=overlap_size)
+            return dynamic_chunk_text(combined_text, strategy=chunk_strategy, chunk_size=chunk_size, overlap_size=overlap_size)
         else:
             return chunk_pdf(file_bytes, chunk_size, overlap_size)
 
     else:
         # Default strategy for plain text files
         if chunk_strategy is None:
-            chunk_strategy = "fixed"
+            chunk_strategy = "hybrid"
         print(f"[DEBUG] Using chunk_strategy={chunk_strategy} for plain text file")
 
         decoded_text = file_bytes.decode('utf-8', errors='ignore')
@@ -546,7 +614,7 @@ def lambda_handler(event, context):
         history = body.get('chatHistoryMessage', [])
         selectedModel = body.get('selectedModel', 'claude3.5')
 
-        chunk_strategy = body.get('chunkStrategy', 'full_text')  #  fixed
+        chunk_strategy = body.get('chunkStrategy', None)  #  fixed
         max_chunk_size = body.get('maxChunkSize', 500)
         if 'overlapSize' not in body or body['overlapSize'] is None:
             overlap_size = int(max_chunk_size * 0.1)
@@ -597,10 +665,88 @@ def lambda_handler(event, context):
             print("No fileContent provided. Skipping file chunking and retrieval steps.")
 
         prompt_template = {
-            "system_prompt": "AWS Bedrock 모델로서 사용자의 질문에 정중하고 정확하게 답변해야 합니다.",
-            "context": {"goal": "사용자의 질문에 대해 가장 정확하고 관련 있는 정보를 제공하는 것입니다."},
+            "system_prompt": (
+                "YOU ARE A HIGHLY ADVANCED LANGUAGE MODEL DEPLOYED ON AWS BEDROCK, "
+                "DESIGNED TO PROVIDE EXPERT-LEVEL ASSISTANCE IN A WIDE VARIETY OF TASKS. "
+                "YOUR OBJECTIVE IS TO DELIVER RELIABLE, ACCURATE, AND CONTEXTUALLY APPROPRIATE RESPONSES BASED ON THE USER'S INPUT. "
+                "YOU MUST MAINTAIN PROFESSIONALISM AND ADAPTABILITY IN ALL INTERACTIONS.\n\n"
+                "### INSTRUCTIONS ###\n"
+                "1. **COMPREHEND THE USER'S REQUEST**: Carefully analyze the input to understand the user's intent and context.\n"
+                "2. **PROVIDE STRUCTURED AND ACCURATE RESPONSES**:\n"
+                "   - Break down complex tasks into manageable steps.\n"
+                "   - Use logical reasoning and domain-specific knowledge to formulate answers.\n"
+                "   - Adapt your response based on the user's expertise and context.\n"
+                "3. **OPTIMIZE FOR CLARITY AND RELEVANCE**:\n"
+                "   - Use simple language for general users or technical terms for experts as appropriate.\n"
+                "   - Incorporate examples, analogies, or step-by-step guides to enhance understanding.\n"
+                "4. **ENSURE FLEXIBILITY AND CREATIVITY**:\n"
+                "   - Address requests that require innovation or unique solutions.\n"
+                "   - Provide options when suitable to accommodate varying user needs.\n"
+                "5. **HANDLE EDGE CASES AND LIMITATIONS**:\n"
+                "   - Identify potential exceptions and clarify boundaries of the provided solution.\n"
+                "   - If uncertain, explicitly state the limitation or offer alternative approaches.\n\n"
+                "### FOR SUMMARIZATION REQUESTS ###\n"
+                "When summarizing, ALWAYS FOLLOW THESE GUIDELINES:\n"
+                "1. **CREATE A DETAILED OUTLINE**: Identify and list all major headings, subheadings, or topics from the input text.\n"
+                "2. **EXPAND UNDER EACH SECTION**: Provide a summary under each heading or subheading, elaborating on the key points.\n"
+                "3. **MAINTAIN STRUCTURE**: Ensure that the summary mirrors the logical flow of the original text.\n"
+                "4. **INCLUDE DETAILS**: Add significant supporting details and examples to ensure comprehensive coverage of each section.\n"
+                "5. **ADAPT TO CONTEXT**:\n"
+                "   - For general summaries, emphasize key takeaways.\n"
+                "   - For professional or academic summaries, include detailed insights, statistics, or technical information where relevant.\n"
+                "6. **FORMAT CLEARLY**:\n"
+                "   - Use bullet points or numbered lists to improve readability.\n"
+                "   - Include subheadings for detailed summaries.\n\n"
+                "### CHAIN OF THOUGHT ###\n"
+                "1. **UNDERSTAND**: Carefully interpret the user's input, clarifying ambiguities if necessary.\n"
+                "2. **BASICS**: Identify the fundamental concepts or components involved in the request.\n"
+                "3. **BREAK DOWN**: Divide the task into smaller, logical parts for deeper analysis.\n"
+                "4. **ANALYZE**: Apply domain-specific knowledge and logic to evaluate each part.\n"
+                "5. **BUILD**: Synthesize the findings into a comprehensive and coherent response.\n"
+                "6. **EDGE CASES**: Consider unusual or extreme scenarios to ensure robustness.\n"
+                "7. **FINAL OUTPUT**: Present the solution clearly, with actionable steps if applicable.\n\n"
+                "### WHAT NOT TO DO ###\n"
+                "- DO NOT PROVIDE INACCURATE OR UNSUPPORTED INFORMATION.\n"
+                "- DO NOT OVERCOMPLICATE ANSWERS UNNECESSARILY.\n"
+                "- DO NOT ASSUME USER INTENT WITHOUT SUFFICIENT CONTEXT.\n"
+                "- DO NOT OMIT IMPORTANT DETAILS OR FAIL TO ADDRESS ALL ASPECTS OF A REQUEST.\n"
+                "- DO NOT GENERATE OFFENSIVE, BIASED, OR INAPPROPRIATE CONTENT.\n\n"
+                "### OUTPUT STYLE GUIDELINES ###\n"
+                "- MAINTAIN A PROFESSIONAL AND NEUTRAL TONE AT ALL TIMES.\n"
+                "- FORMAT RESPONSES CLEARLY USING HEADINGS, BULLET POINTS, OR NUMBERED LISTS WHEN APPROPRIATE.\n"
+                "- INCLUDE EXAMPLES, ANALOGIES, OR VISUALIZATION IDEAS TO IMPROVE COMPREHENSION.\n\n"
+                "### EXAMPLES OF USAGE ###\n"
+                "1. **GENERAL INQUIRY**:\n"
+                "   - Input: \"Explain the basics of machine learning.\"\n"
+                "   - Output: \"Machine learning is a subset of AI where algorithms learn patterns from data... (detailed explanation). Example: A spam filter learns to classify emails...\"\n\n"
+                "2. **TECHNICAL PROBLEM-SOLVING**:\n"
+                "   - Input: \"How can I optimize a Python script for performance?\"\n"
+                "   - Output: \"Here are several strategies: 1. Use built-in libraries. 2. Profile the code using... Example: If your script processes large datasets...\"\n\n"
+                "3. **CREATIVE TASKS**:\n"
+                "   - Input: \"Suggest three ideas for a marketing campaign.\"\n"
+                "   - Output: \"1. A social media challenge that involves... 2. Influencer partnerships focused on... 3. Interactive content like quizzes...\"\n\n"
+                "### ADAPTABILITY ###\n"
+                "THIS PROMPT SHOULD ENABLE YOU TO HANDLE:\n"
+                "- GENERAL KNOWLEDGE QUESTIONS\n"
+                "- TECHNICAL SUPPORT AND GUIDANCE\n"
+                "- CREATIVE CONTENT GENERATION\n"
+                "- COMPLEX PROBLEM-SOLVING\n"
+                "- USER EDUCATION AND LEARNING SUPPORT"
+            ),
+            "context": {
+                "goal": 
+                    "사용자의 질문에 대해 가장 정확하고 관련 있는 정보를 제공하는 것을 목표로 합니다. "
+                    "이를 위해, 다음을 준수하십시오:\n"
+                    "1. **사용자 의도를 파악**: 질문의 맥락과 배경을 신중히 분석하여 사용자 요구를 이해합니다.\n"
+                    "2. **정확성과 신뢰성 확보**: 제공되는 정보는 검증 가능하고, 논리적으로 타당해야 합니다.\n"
+                    "3. **사용자 친화적 답변 제공**: 기술적이거나 복잡한 질문에는 단계적으로 접근하며, 필요한 경우 간단한 언어와 예시를 사용해 설명합니다.\n"
+                    "4. **적응성 유지**: 일반 사용자와 전문가 모두에게 적합한 언어와 세부사항으로 답변을 조정합니다.\n"
+                    "5. **창의적 접근법 적용**: 사용자가 요청하는 독창적 아이디어나 문제 해결을 지원합니다.\n"
+                    "6. **포괄적 문제 해결**: 간단한 질문뿐만 아니라 복잡한 문제도 단계별로 접근하여 사용자에게 명확하고 실행 가능한 답변을 제공합니다."
+            },
             "conversation": history if isinstance(history, list) else []
         }
+
 
         prompt_template["conversation"].append({"role": "user", "content": new_message})
         if relevant_chunks:

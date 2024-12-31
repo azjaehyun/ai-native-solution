@@ -55,7 +55,7 @@ const App = () => {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadedFile, setUploadedFile] = useState(null);
 
-  const chatHistoryLimit = 5;
+  const chatHistoryLimit = 10;
 
   useEffect(() => {
     const loadChatHistory = async () => {
