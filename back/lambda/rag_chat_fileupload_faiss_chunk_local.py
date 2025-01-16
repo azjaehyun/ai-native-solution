@@ -405,10 +405,10 @@ if __name__ == "__main__":
 
 # pip install boto3 faiss-cpu numpy python-docx PyPDF2 openpyxl
 # aws configure
-# python local_chunk_test.py \
-#   --file "/path/to/document.pdf" \
-#   --chunkStrategy "sentence" \
-#   --maxChunkSize 400
+python local_chunk_test.py \
+  --file "/path/to/document.pdf" \
+  --chunkStrategy "sentence" \
+  --maxChunkSize 400
 
 # python local_chunk_test.py \
 #   --file "/path/to/document.pdf" \

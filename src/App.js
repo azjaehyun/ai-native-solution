@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import {
   AppBar,
+  Button,
   Toolbar,
   Drawer,
   IconButton,
@@ -22,6 +23,11 @@ import {
   useMediaQuery,
   useTheme
 } from "@mui/material";
+import Dialog from '@mui/material/Dialog';
+import DialogActions from '@mui/material/DialogActions';
+import DialogContent from '@mui/material/DialogContent';
+import DialogContentText from '@mui/material/DialogContentText';
+import DialogTitle from '@mui/material/DialogTitle';
 import MenuIcon from "@mui/icons-material/Menu";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import SendIcon from "@mui/icons-material/Send";
@@ -32,6 +38,7 @@ import { getChatHistory, saveChatHistory } from './indexdb/indexedDB';
 import LinearProgress from '@mui/material/LinearProgress';
 import AttachFileIcon from '@mui/icons-material/AttachFile';
 import CancelIcon from '@mui/icons-material/Cancel';
+import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 
 const App = () => {
@@ -50,10 +57,11 @@ const App = () => {
   const [newTitle, setNewTitle] = useState("");
   const [selectedChatIndex, setSelectedChatIndex] = useState(null);
   const [chatHistory, setChatHistory] = useState([]);
-  const controllerRef = useRef(null);
-  const chatBoxRef = useRef(null);
+  const [fileLimitAlert, setFileLimitAlert] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadedFile, setUploadedFile] = useState(null);
+  const controllerRef = useRef(null);
+  const chatBoxRef = useRef(null);
 
   const chatHistoryLimit = 10;
 
@@ -191,16 +199,16 @@ const App = () => {
   };
 
   const handleFileUpload = (e) => {
-
     const file = e.target.files[0];
+    console.log("handleFileUpload.file", file);
 
-    if(!file) return;
-
-    // 같은 파일 재 업로드 시에도 onchage 이벤트 트리거 되도록 초기화
-    e.target.value = null;
-
-    console.log("handleFileUpload.file",file);
     if (file) {
+      const fileSizeInMB = file.size / (1024 * 1024); // Convert bytes to MB
+      if (fileSizeInMB > 10) {
+        setFileLimitAlert(true); // Show alert if file is too large
+        return;
+      }
+
       setUploadedFile(file);
       setUploadProgress(0);
 
@@ -295,7 +303,26 @@ const App = () => {
     setUploadProgress(0);
   };
 
+  const handleCloseAlert = () => {
+    setFileLimitAlert(false);
+  };
 
+  const [logoutDialogOpen, setLogoutDialogOpen] = useState(false);
+  const navigate = useNavigate();
+
+  // const handleLogoutClick = () => {
+  //   setLogoutDialogOpen(true);
+  // };
+
+  const handleLogoutConfirm = () => {
+    sessionStorage.setItem('isAuthenticated', 'false');
+    setLogoutDialogOpen(false);
+    navigate('/');
+  };
+
+  const handleLogoutCancel = () => {
+    setLogoutDialogOpen(false);
+  };
 
   const sortedChatHistory = [...chatHistory].sort((a, b) => new Date(b.date) - new Date(a.date));
 
@@ -450,9 +477,33 @@ const App = () => {
               <MenuItem value="claude3.5">Claude3.5</MenuItem>
               <MenuItem value="claude3.0">Claude3.0</MenuItem>
             </Select>
+           
+              <Dialog
+                open={logoutDialogOpen}
+                onClose={handleLogoutCancel}
+                aria-labelledby="logout-dialog-title"
+                aria-describedby="logout-dialog-description"
+              >
+                <DialogTitle id="logout-dialog-title">{"Logout Confirmation"}</DialogTitle>
+                <DialogContent>
+                  <DialogContentText id="logout-dialog-description">
+                    Are you sure you want to log out?
+                  </DialogContentText>
+                </DialogContent>
+                <DialogActions>
+                  <Button onClick={handleLogoutCancel} color="primary">
+                    Cancel
+                  </Button>
+                  <Button onClick={handleLogoutConfirm} color="primary" autoFocus>
+                    Confirm
+                  </Button>
+                </DialogActions>
+            </Dialog>
           </Toolbar>
+         
         </AppBar>
 
+       
         <Box
           ref={chatBoxRef}
           sx={{
@@ -542,7 +593,16 @@ const App = () => {
           <LinearProgress variant="determinate" value={uploadProgress} sx={{ mt: 1, width: '100%' }} />
         )}
         </Box>
-      
+        <Snackbar
+          open={fileLimitAlert}
+          autoHideDuration={3000}
+          onClose={handleCloseAlert}
+          anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+        >
+          <Alert onClose={handleCloseAlert} severity="error" sx={{ width: '100%' }}>
+            파일은 10MB 이하만 가능합니다.
+          </Alert>
+        </Snackbar>
         <Box sx={{ display: "flex", alignItems: "center", p: 1 }}>
     
           <TextField

@@ -292,25 +292,28 @@ def chunk_pdf(
 
     return chunks
 
-
 def chunk_excel(
     file_bytes: bytes,
     chunk_size: int = 500,
-    overlap_size: int = 50
-) -> List[str]:
+    overlap_size: int = 50,
+    header_row_index: int = 1
+) -> list:
     """
     Excel 파일을 시트(탭) → 행(Row) 순으로 순회 후,
-    각 행을 문자열로 연결해 한 덩어리로 만들고,
-    너무 길면 슬라이딩 윈도우(chunk_size/overlapSize)로 분할.
+    여러 행을 합쳐 하나의 청크를 생성하며,
+    각 청크의 첫 부분에 지정된 헤더 행을 반복적으로 포함.
 
-    디버깅을 위해:
-    1) read_only=False, data_only=False 로 변경
-    2) row_text 출력
-    3) 필요시 헤더 스킵 로직 추가
+    Args:
+        file_bytes (bytes): Excel 파일 바이트 데이터
+        chunk_size (int): 최대 청크 크기 (기본값 500)
+        overlap_size (int): 청크 간 중첩 크기 (기본값 50)
+        header_row_index (int): 헤더 행의 인덱스 (기본값 1, 첫 번째 행)
+
+    Returns:
+        List[str]: 청크 리스트
     """
     chunks = []
     try:
-        # 수정 부분: read_only=False, data_only=False
         wb = load_workbook(filename=BytesIO(file_bytes), read_only=False, data_only=False)
     except Exception as e:
         print(f"Error loading Excel: {e}")
@@ -320,37 +323,43 @@ def chunk_excel(
         sheet = wb[sheet_name]
         print(f"Processing sheet: {sheet_name}")
 
+        header = None  # 헤더 값을 저장
+        current_chunk = ""
+
         for row_idx, row in enumerate(sheet.iter_rows(values_only=True), start=1):
-
-            # (선택) 헤더 스킵 로직 예시:
-            # if row_idx == 1:
-            #     print("Skipping header row.")
-            #     continue
-
-            row_str_list = [str(cell) if cell is not None else '' for cell in row]
-            row_text = " | ".join(row_str_list).strip()
-
-            print(f"Row {row_idx} raw text => '{row_text}'")
-            if not row_text:
-                print(f"Row {row_idx} is empty. Skipping.")
+            # 지정된 헤더 행을 처리
+            if row_idx == header_row_index:
+                header = " | ".join([str(cell) if cell is not None else '' for cell in row])
                 continue
 
-            if len(row_text) <= chunk_size:
-                chunk_str = f"[Sheet: {sheet_name}] {row_text}"
-                print(f"Row {row_idx} => One chunk => {chunk_str}")
-                chunks.append(chunk_str)
-            else:
-                start = 0
-                while start < len(row_text):
-                    end = start + chunk_size
-                    chunk = row_text[start:end]
-                    chunk_str = f"[Sheet: {sheet_name}] {chunk}"
-                    print(f"Row {row_idx} => Splitted chunk => {chunk_str}")
-                    chunks.append(chunk_str)
-                    start += max(chunk_size - overlap_size, 1)
+            # 헤더 이후의 데이터를 처리
+            if row_idx > header_row_index:
+                # 행 데이터 합치기
+                row_str_list = [str(cell) if cell is not None else '' for cell in row]
+                row_text = " | ".join(row_str_list).strip()
+
+                if not row_text:
+                    continue
+
+                # 현재 청크에 행 데이터 추가
+                if len(current_chunk) + len(row_text) + 1 <= chunk_size:
+                    current_chunk += f"{row_text}\n"
+                else:
+                    # 현재 청크를 저장하고 새 청크 시작
+                    chunks.append(f"[Sheet: {sheet_name}]\n{header}\n{current_chunk.strip()}")
+                    # 중첩된 데이터를 포함한 새로운 청크 생성
+                    if overlap_size > 0 and len(current_chunk) > overlap_size:
+                        current_chunk = current_chunk[-overlap_size:] + row_text + "\n"
+                    else:
+                        current_chunk = row_text + "\n"
+
+        # 남아있는 데이터 처리
+        if current_chunk.strip():
+            chunks.append(f"[Sheet: {sheet_name}]\n{header}\n{current_chunk.strip()}")
 
     wb.close()
     return chunks
+
 
 
 def chunk_excel_domain_based(
@@ -511,13 +520,13 @@ def read_and_chunk_file(
     elif file_type == 'excel':
         # Default strategy for Excel files
         if chunk_strategy is None:
-            chunk_strategy = "domain"
+            chunk_strategy = "chunk_excel"
         print(f"[DEBUG] Using chunk_strategy={chunk_strategy} for Excel file")
 
-        if chunk_strategy == "domain":
-            return chunk_excel_domain_based(file_bytes, category_col=category_col)
-        else:
+        if chunk_strategy == "chunk_excel":
             return chunk_excel(file_bytes, chunk_size, overlap_size)
+        else:
+            return chunk_excel_domain_based(file_bytes, category_col=category_col)
 
     elif file_type == 'pdf':
         # Default strategy for PDF files
@@ -593,12 +602,29 @@ def create_faiss_index(embeddings: List[np.ndarray]) -> faiss.IndexFlatL2:
     print("FAISS index created.")
     return index
 
+def print_retrieval_details(indices: np.ndarray, distances: np.ndarray, texts: List[str]) -> None:
+    """
+    Print detailed retrieval results including indices, distances, and corresponding texts.
+
+    Args:
+        indices (np.ndarray): Indices of the retrieved items.
+        distances (np.ndarray): Distances of the retrieved items.
+        texts (List[str]): List of texts from which items are retrieved.
+    """
+    print("Detailed retrieval results:")
+    for idx, dist in zip(indices[0], distances[0]):
+        if idx < len(texts):
+            print(f"Index: {idx}, Distance: {dist:.4f}, Text: {texts[idx]}")
+        else:
+            print(f"Index: {idx}, Distance: {dist:.4f}, Text: [Index out of bounds]")
+
 
 def retrieve_relevant_chunks(query: str, faiss_index: faiss.IndexFlatL2, texts: List[str], model_id: str, top_k: int = 3) -> List[str]:
     print(f"Retrieving relevant chunks for query: {query}")
     query_embedding = generate_embeddings([query], model_id=model_id)[0]
     distances, indices = faiss_index.search(np.array([query_embedding], dtype=np.float32), top_k)
     print(f"Retrieved indices: {indices[0]}, distances: {distances[0]}")
+    print_retrieval_details(indices, distances, texts)
     return [texts[i] for i in indices[0] if i < len(texts)]
 
 
@@ -685,18 +711,13 @@ def lambda_handler(event, context):
                 "5. **HANDLE EDGE CASES AND LIMITATIONS**:\n"
                 "   - Identify potential exceptions and clarify boundaries of the provided solution.\n"
                 "   - If uncertain, explicitly state the limitation or offer alternative approaches.\n\n"
-                "### FOR SUMMARIZATION REQUESTS ###\n"
-                "When summarizing, ALWAYS FOLLOW THESE GUIDELINES:\n"
-                "1. **CREATE A DETAILED OUTLINE**: Identify and list all major headings, subheadings, or topics from the input text.\n"
-                "2. **EXPAND UNDER EACH SECTION**: Provide a summary under each heading or subheading, elaborating on the key points.\n"
-                "3. **MAINTAIN STRUCTURE**: Ensure that the summary mirrors the logical flow of the original text.\n"
-                "4. **INCLUDE DETAILS**: Add significant supporting details and examples to ensure comprehensive coverage of each section.\n"
-                "5. **ADAPT TO CONTEXT**:\n"
-                "   - For general summaries, emphasize key takeaways.\n"
-                "   - For professional or academic summaries, include detailed insights, statistics, or technical information where relevant.\n"
-                "6. **FORMAT CLEARLY**:\n"
-                "   - Use bullet points or numbered lists to improve readability.\n"
-                "   - Include subheadings for detailed summaries.\n\n"
+                "### FOR CASUAL AND EVERYDAY CONVERSATIONS ###\n"
+                "1. **USE A FRIENDLY AND WARM TONE**: Respond in a conversational and approachable manner.\n"
+                "2. **DEMONSTRATE EMPATHY AND UNDERSTANDING**: Reflect emotional intelligence by acknowledging the user's feelings and context.\n"
+                "3. **ADAPT TO INFORMAL CONTEXTS**: Use simpler and more natural language for casual chats (e.g., '안녕!' or '어떻게 지내세요?').\n"
+                "4. **INCLUDE POSITIVE REINFORCEMENT**: Add uplifting or encouraging remarks when appropriate (e.g., '좋은 하루 보내세요!' or '정말 멋진 생각이에요!').\n"
+                "5. **BE ENGAGING AND RESPONSIVE**: Ask follow-up questions to keep the conversation lively and engaging.\n"
+                "6. **STAY NEUTRAL AND SUPPORTIVE**: Ensure responses remain polite, neutral, and culturally sensitive in all situations.\n\n"
                 "### CHAIN OF THOUGHT ###\n"
                 "1. **UNDERSTAND**: Carefully interpret the user's input, clarifying ambiguities if necessary.\n"
                 "2. **BASICS**: Identify the fundamental concepts or components involved in the request.\n"
@@ -714,15 +735,19 @@ def lambda_handler(event, context):
                 "### OUTPUT STYLE GUIDELINES ###\n"
                 "- MAINTAIN A PROFESSIONAL AND NEUTRAL TONE AT ALL TIMES.\n"
                 "- FORMAT RESPONSES CLEARLY USING HEADINGS, BULLET POINTS, OR NUMBERED LISTS WHEN APPROPRIATE.\n"
-                "- INCLUDE EXAMPLES, ANALOGIES, OR VISUALIZATION IDEAS TO IMPROVE COMPREHENSION.\n\n"
+                "- INCLUDE EXAMPLES, ANALOGIES, OR VISUALIZATION IDEAS TO IMPROVE COMPREHENSION.\n"
+                "- FOR CASUAL INTERACTIONS, USE A LIGHTER, MORE RELAXED TONE TO MAKE THE USER FEEL AT EASE.\n\n"
                 "### EXAMPLES OF USAGE ###\n"
                 "1. **GENERAL INQUIRY**:\n"
                 "   - Input: \"Explain the basics of machine learning.\"\n"
                 "   - Output: \"Machine learning is a subset of AI where algorithms learn patterns from data... (detailed explanation). Example: A spam filter learns to classify emails...\"\n\n"
-                "2. **TECHNICAL PROBLEM-SOLVING**:\n"
-                "   - Input: \"How can I optimize a Python script for performance?\"\n"
-                "   - Output: \"Here are several strategies: 1. Use built-in libraries. 2. Profile the code using... Example: If your script processes large datasets...\"\n\n"
-                "3. **CREATIVE TASKS**:\n"
+                "2. **CASUAL GREETING**:\n"
+                "   - Input: \"안녕?\"\n"
+                "   - Output: \"안녕하세요! 오늘 하루는 어땠어요? 😊\"\n\n"
+                "3. **EMPATHETIC RESPONSE**:\n"
+                "   - Input: \"기분이 좀 안 좋아.\"\n"
+                "   - Output: \"무슨 일이 있으신가요? 괜찮으시다면 이야기 나눠보세요. 제가 도울 수 있는 일이 있을지도 몰라요. 💛\"\n\n"
+                "4. **CREATIVE TASKS**:\n"
                 "   - Input: \"Suggest three ideas for a marketing campaign.\"\n"
                 "   - Output: \"1. A social media challenge that involves... 2. Influencer partnerships focused on... 3. Interactive content like quizzes...\"\n\n"
                 "### ADAPTABILITY ###\n"
@@ -730,7 +755,7 @@ def lambda_handler(event, context):
                 "- GENERAL KNOWLEDGE QUESTIONS\n"
                 "- TECHNICAL SUPPORT AND GUIDANCE\n"
                 "- CREATIVE CONTENT GENERATION\n"
-                "- COMPLEX PROBLEM-SOLVING\n"
+                "- CASUAL EVERYDAY CONVERSATIONS\n"
                 "- USER EDUCATION AND LEARNING SUPPORT"
             ),
             "context": {
