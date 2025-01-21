@@ -509,9 +509,27 @@
   - 파라미터 유효성 검사:
     ```python
     def validate_params(params):
-        if "dangerous_param" in params:
-            raise ValueError("Invalid parameter")
+        # 허용된 매개변수 목록
+        allowed_params = ["user_id", "amount", "role"]
+        
+        # 1. 매개변수 이름 검증
+        for param in params:
+            if param not in allowed_params:
+                raise ValueError(f"Invalid parameter detected: {param}")
 
+        # 2. 값의 유형 및 범위 검증
+        if "amount" in params:
+            if not isinstance(params["amount"], int) or params["amount"] <= 0:
+                raise ValueError("Invalid amount value")
+        
+        if "role" in params:
+            if params["role"] not in ["user", "admin"]:
+                raise ValueError("Invalid role value")
+        
+        print("Parameters are valid.")
+
+    # 예제: 요청 파라미터 검증
+    api_request_params = {"user_id": "123", "amount": 100, "role": "user"}
     validate_params(api_request_params)
     ```
 
@@ -520,11 +538,19 @@
 - **대응 방안**:
   - 권한 기반 액세스 제어:
     ```python
-    def check_user_permissions(user, action):
-        if action not in user.allowed_actions:
-            raise PermissionError("Unauthorized action")
+    def check_authorization(user_role, action):
+        permissions = {
+            "user": ["read_data"],
+            "admin": ["read_data", "modify_data", "delete_data"]
+        }
+        
+        if action not in permissions.get(user_role, []):
+            raise PermissionError("User not authorized for this action.")
 
-    check_user_permissions(current_user, requested_action)
+    # 사용자 권한 확인
+    user_role = "user"
+    action = "delete_data"
+    check_authorization(user_role, action)  # PermissionError 발생
     ```
 
 #### **3.3 사용자 동의 절차 누락**
@@ -532,170 +558,147 @@
 - **대응 방안**:
   - 사용자 동의 인터페이스 구현:
     ```python
-    def request_user_consent():
-        consent = input("Do you approve this action? (yes/no)")
-        if consent.lower() != "yes":
-            raise PermissionError("Action not approved")
+    import logging
+    import time
 
-    request_user_consent()
+    # 로그 설정
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+    def request_user_consent(action_description, timeout=10):
+        """
+        사용자 동의를 요청하는 함수
+        :param action_description: 수행하려는 작업 설명
+        :param timeout: 동의 시간 제한 (초 단위)
+        """
+        print(f"Action: {action_description}")
+        print(f"You have {timeout} seconds to respond.")
+
+        start_time = time.time()
+        while True:
+            # 남은 시간 계산
+            elapsed_time = time.time() - start_time
+            if elapsed_time > timeout:
+                raise TimeoutError("Time expired. Action was not approved.")
+            
+            # 사용자 입력 받기
+            consent = input("Do you approve this action? (yes/no): ")
+            
+            if consent.lower() == "yes":
+                # 추가 확인 단계
+                double_check = input("Are you absolutely sure? (type 'CONFIRM' to proceed): ")
+                if double_check == "CONFIRM":
+                    logging.info("Action approved by the user.")
+                    return True
+                else:
+                    print("Action canceled during double-check.")
+                    raise PermissionError("Action not confirmed.")
+            
+            elif consent.lower() == "no":
+                logging.warning("Action explicitly denied by the user.")
+                raise PermissionError("Action not approved by the user.")
+            
+            else:
+                print("Invalid input. Please type 'yes' or 'no'.")
+
+    # 민감한 작업 수행 예시
+    try:
+        request_user_consent("Delete your account permanently")
+        print("Action approved. Proceeding with deletion...")
+        # 계정 삭제 작업 수행
+    except PermissionError as e:
+        print(f"Permission Error: {e}")
+    except TimeoutError as e:
+        print(f"Timeout Error: {e}")
+
+
+    ### 결과 예시
+    Action: Delete your account permanently
+    You have 10 seconds to respond.
+    Do you approve this action? (yes/no): yes
+    Are you absolutely sure? (type 'CONFIRM' to proceed): CONFIRM
+    Action approved. Proceeding with deletion...
     ```
 
 #### **3.4 샌드박스 미적용**
 - **위협 시나리오**: 코드 실행 환경 격리가 이루어지지 않아 시스템이 손상.
 - **대응 방안**:
-  - 격리된 환경에서 코드 실행:
+  - 격리된 환경에서 코드 실행.
     ```bash
-    docker run --rm -v $(pwd):/sandbox -w /sandbox sandbox-image python script.py
+    docker run --rm \
+      -v $(pwd):/sandbox \          # 현재 디렉토리를 컨테이너의 /sandbox에 마운트
+      -w /sandbox \                 # 작업 디렉토리를 /sandbox로 설정
+      --memory="512m" \             # 메모리 사용량 제한 (512MB)
+      --cpus="1" \                  # CPU 사용량 제한 (1 CPU)
+      --pids-limit=100 \            # 프로세스 생성 제한 (100개)
+      --storage-opt size=1G \       # 디스크 사용량 제한 (1GB)
+      sandbox-image \               # Docker 이미지 이름
+      python create_file_in_sandbox.py  # 실행할 스크립트
     ```
+    - 샌드 박스를 활용한 파일 생성 create_file_in_sandbox 함수  
+      ```python
+      import subprocess
+      import os
 
+      def create_file_in_sandbox(file_content, filename="output.csv"):
+          """
+          격리된 Docker 샌드박스에서 파일을 생성
+          :param file_content: 파일에 저장할 데이터
+          :param filename: 파일 이름
+          :return: 생성된 파일 경로
+          """
+          # 샌드박스 경로 설정
+          sandbox_dir = "sandbox_files"
+          os.makedirs(sandbox_dir, exist_ok=True)
+
+          # Docker에서 실행할 스크립트 준비
+          docker_script = f"""
+          echo "{file_content.replace('"', '\\"')}" > /sandbox/{filename}
+          """
+
+          # Docker에서 파일 생성
+          try:
+              result = subprocess.run(
+                  [
+                      "docker", "run", "--rm",
+                      "-v", f"{os.path.abspath(sandbox_dir)}:/sandbox",
+                      "sandbox-image", "/bin/bash", "-c", docker_script
+                  ],
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  text=True
+              )
+              if result.returncode == 0:
+                  return os.path.join(sandbox_dir, filename)
+              else:
+                  raise RuntimeError(f"Error creating file: {result.stderr}")
+          except Exception as e:
+              raise RuntimeError(f"Sandbox execution failed: {str(e)}")
+
+      # 사용자 요청 처리 예제
+      try:
+          file_path = create_file_in_sandbox("1,1\n2,3\n3,5\n5,8", "fibonacci.csv")
+          print(f"File created at: {file_path}")
+
+          ## 
+      except RuntimeError as e:
+          print(f"Error: {e}")    
+      ```    
+
+    - create_file_in_sandbox 함수에 악의적인 파라미터를 입력하여 공격을 시도하는 예제 코드
+      ```python
+            # 악성 입력 예제
+      file_content = """
+      import os
+      os.system('rm -rf /')  # 시스템 파일 삭제 시도
+      """
+      filename = "malicious_script.py"
+
+      # create_file_in_sandbox 호출
+      create_file_in_sandbox(file_content, filename)
+      # rm -rf / 명령어가 실행되면 호스트 파일 시스템이 삭제될 수 있습니다. !!
+      ```
+    - 리소스 소진 공격 
+      ```python
+      file_content = "A" * (10**9)  # 1GB 데이터
+      ```  
 ---
-
-
-
-
-## **4. 위험도 평가 및 종합 대응 시나리오 및 대응 방안**
-
-### **4.1 침투 테스트 도구 활용**
-
-#### **시나리오 1: OWASP ZAP을 활용한 웹 애플리케이션 취약점 진단**
-
-##### **상황**
-- 웹 애플리케이션 배포 후, SQL Injection 및 XSS와 같은 보안 취약점이 존재할 가능성을 테스트해야 합니다.
-- 자동화된 도구를 통해 빠르게 결과를 분석하려 합니다.
-
-##### **대응 방법**
-1. **OWASP ZAP 설치 및 설정**
-   ```bash
-   sudo apt update
-   sudo apt install zaproxy
-   ```
-   - `OWASP ZAP`는 오픈 소스 웹 애플리케이션 취약점 분석 도구로, 자동 크롤링 및 취약점 탐지를 지원합니다.
-
-2. **테스트 실행**
-   ```bash
-   zap-baseline.py -t https://example.com -r report.html
-   ```
-   - `zap-baseline.py`를 사용하여 기본 테스트를 실행합니다.
-   - 보고서(`report.html`)를 분석하여 취약점을 파악합니다.
-
-3. **조치**
-   - SQL Injection 취약점 발견 시, Prepared Statement로 쿼리 구조 변경.
-   - XSS 취약점 발견 시, 출력 시점에서 사용자 입력값을 적절히 이스케이프 처리.
-
----
-
-#### **시나리오 2: Red Team 공격 시뮬레이션**
-
-##### **상황**
-- 내부 네트워크를 공격 시뮬레이션하여 방어 태세를 점검해야 합니다.
-- 침투 테스트를 통해 방화벽 및 네트워크 정책의 효과를 검증합니다.
-
-##### **대응 방법**
-1. **공격 시뮬레이션 준비**
-   - `msfconsole` 및 `nmap`을 활용하여 공격을 시뮬레이션합니다.
-   ```bash
-   msfconsole
-   use exploit/multi/handler
-   set payload windows/meterpreter/reverse_tcp
-   nmap -sC -sV -p- example.com
-   ```
-   - `msfconsole`은 악성 페이로드 실행, `nmap`은 포트 및 서비스 스캐닝에 사용됩니다.
-
-2. **결과 분석**
-   - 방화벽 로그를 통해 탐지된 포트 스캐닝 및 페이로드 전송 여부 확인.
-
-3. **조치**
-   - 탐지되지 않은 포트에 대한 방화벽 규칙 추가.
-   - 시뮬레이션 중 사용된 익스플로잇을 기반으로 시스템 패치 수행.
-
----
-
-### **4.2 모니터링 및 이상 탐지**
-
-#### **시나리오 1: ELK 스택을 활용한 중앙 로그 관리**
-
-##### **상황**
-- 서버 및 애플리케이션에서 생성된 로그를 실시간으로 모니터링하고, 이상 트래픽을 탐지해야 합니다.
-
-##### **대응 방법**
-1. **ELK 스택 설치**
-   ```bash
-   sudo apt update
-   sudo apt install elasticsearch logstash kibana
-   ```
-   - Elasticsearch: 로그 저장 및 검색.
-   - Logstash: 로그 수집 및 전처리.
-   - Kibana: 로그 시각화.
-
-2. **구성 파일 작성**
-   - `logstash.conf` 예시:
-     ```conf
-     input {
-       file {
-         path => "/var/log/app/*.log"
-         start_position => "beginning"
-       }
-     }
-     output {
-       elasticsearch {
-         hosts => ["localhost:9200"]
-       }
-     }
-     ```
-   - 로그를 실시간으로 Elasticsearch에 전송.
-
-3. **대시보드 구성**
-   - Kibana에서 대시보드를 생성하여 이상 로그(예: 에러 비율 급증)를 시각화.
-
-4. **조치**
-   - 이상 로그 발견 시, 관련 서비스를 재검토하고 패치 적용.
-
----
-
-#### **시나리오 2: Isolation Forest 기반 이상 탐지**
-
-##### **상황**
-- 로그 데이터를 분석하여 정상 범위를 벗어난 행동(예: 과도한 요청, 비정상적인 IP 접근)을 자동 탐지해야 합니다.
-
-##### **대응 방법**
-1. **Isolation Forest 모델 학습**
-   ```python
-   from sklearn.ensemble import IsolationForest
-   import numpy as np
-
-   # 정상 로그 데이터 학습
-   normal_logs = np.array([[1, 2], [1, 3], [2, 3], [4, 4]])
-   model = IsolationForest(contamination=0.1)
-   model.fit(normal_logs)
-   ```
-
-2. **새로운 로그 데이터 분석**
-   ```python
-   new_logs = np.array([[1, 2], [5, 6]])
-   anomalies = model.predict(new_logs)
-
-   for i, log in enumerate(new_logs):
-       status = "Anomaly" if anomalies[i] == -1 else "Normal"
-       print(f"Log: {log}, Status: {status}")
-   ```
-
-3. **조치**
-   - 이상 로그(`Status: Anomaly`) 발생 시, 해당 로그의 IP 차단 또는 관련 계정 정지.
-   - 추가적으로 이상 데이터 패턴을 학습 데이터에 반영하여 모델 개선.
-
----
-
-### **종합 대응 방안**
-1. **예방**
-   - OWASP ZAP으로 정기적으로 웹 애플리케이션 취약점 검사.
-   - ELK 스택을 통한 로그 중앙화로 실시간 모니터링 강화.
-
-2. **탐지**
-   - Isolation Forest와 같은 ML 모델로 자동화된 이상 탐지.
-
-3. **대응**
-   - 탐지된 이상 활동에 대해 빠른 차단 조치(예: 방화벽 규칙 추가, 계정 비활성화).
-   - Red Team 시뮬레이션 결과를 기반으로 취약점 개선.
-
-4. **학습**
-   - 모든 사고 데이터를 분석하여 새로운 위협 모델을 구성하고 방어 체계를 강화.
