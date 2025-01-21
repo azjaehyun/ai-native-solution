@@ -19,19 +19,46 @@
 
 2. **정규화된 입력 필터링**  
    악성 키워드 또는 패턴을 탐지하여 사전 차단합니다.
+    1. 더 많은 민감 정보 패턴 추가
+    2. 마스킹 기능 구현
+    3. 로깅 추가
+    4. 에러 처리 개선
    ```python
-   import re
+    def filter_sensitive_output(output):
+        # 민감 정보 패턴 확장
+        sensitive_patterns = {
+            'ssn': r'\b\d{6}-\d{7}\b',           # 주민등록번호
+            'us_ssn': r'\b(?:\d{3}-\d{2}-\d{4})\b',  # 미국 SSN
+            'email': r'\b[\w\.-]+@[\w\.-]+\.\w+\b',   # 이메일
+            'phone': r'\b(?:\d{3}-\d{3,4}-\d{4})\b',  # 전화번호
+            'card': r'\b(?:\d{4}-\d{4}-\d{4}-\d{4})\b', # 카드번호
+            'account': r'\b\d{11,14}\b'           # 계좌번호
+        }
+        
+        try:
+            masked_output = output
+            for key, pattern in sensitive_patterns.items():
+                matches = re.finditer(pattern, masked_output)
+                for match in matches:
+                    sensitive_text = match.group()
+                    masked_text = mask_sensitive_info(sensitive_text, key)
+                    masked_output = masked_output.replace(sensitive_text, masked_text)
+                    
+                    # 로깅
+                    logging.warning(f"Sensitive information ({key}) detected and masked")
+                    
+            return masked_output
+        
+        except Exception as e:
+            logging.error(f"Error filtering sensitive information: {str(e)}")
+            return "Error processing output"
 
-   def sanitize_input(input_text):
-       prohibited_patterns = [
-           r'(os\.system|subprocess|exec|eval)',  # 코드 실행 관련
-           r'(drop\s+table|delete\s+from)',       # SQL Injection
-           r'(<script>|<iframe>)'                # XSS 공격
-       ]
-       for pattern in prohibited_patterns:
-           if re.search(pattern, input_text, re.IGNORECASE):
-               raise ValueError("Prohibited input detected.")
-       return input_text
+    def mask_sensitive_info(text, info_type):
+        if info_type == 'email':
+            username, domain = text.split('@')
+            return f"{username[:2]}{'*' * (len(username)-2)}@{domain}"
+        else:
+            return '*' * (len(text)-4) + text[-4:]
    ```
 
 3. **입력 길이 제한**  
@@ -84,40 +111,118 @@
 ## **2. LLM 통합 점검**
 
 ### **2.1 RAG 데이터 오염 방지**
-#### **구체적인 구현 방안**
-1. **벡터 DB 접근 제한**  
-   RBAC(Role-Based Access Control)을 통해 권한 기반 데이터 접근을 설정합니다.
-   ```yaml
-   roles:
-     - name: "admin"
-       permissions:
-         - "read"
-         - "write"
-         - "delete"
-     - name: "user"
-       permissions:
-         - "read"
-   ```
 
-2. **데이터 삽입 시 유효성 검사**
-   벡터 DB에 삽입하기 전 데이터의 적합성을 검증합니다.
+#### **구체적인 구현 방안**
+
+1. **벡터 DB 접근 제한**  
+   **RBAC(Role-Based Access Control)** 또는 **ABAC(Attribute-Based Access Control)**를 통해 세분화된 권한 관리와 데이터 접근 제어를 수행합니다.  
+   - **권한 정책 예시 (RBAC)**:
+     ```yaml
+     roles:
+       - name: "admin"
+         permissions:
+           - "read"
+           - "write"
+           - "delete"
+       - name: "user"
+         permissions:
+           - "read"
+     ```
+   - **코드 예시**: ABAC 방식 적용
+     ```python
+     def has_access(user, resource, action):
+         if user.role == "admin":
+             return True
+         return resource.owner == user.id and action in resource.allowed_actions
+     ```
+
+2. **데이터 삽입 시 유효성 검사**  
+   벡터 DB에 삽입하기 전에 데이터가 기준을 충족하는지 검증합니다.  
+   **추가: 악성 코드, SQL 인젝션, 특수 문자 등 방어 강화**  
    ```python
+   import re
+
    def validate_vector_data(data):
-       prohibited_patterns = [r'<script>', r'[^a-zA-Z0-9\s]']
+       prohibited_patterns = [r'<script.*?>', r'(?:--|;|#|\/\*|\*\/|@@|char\(|varchar\()', r'[^\w\s,.?!]']
        for pattern in prohibited_patterns:
            if re.search(pattern, data):
-               raise ValueError("Invalid data detected.")
+               raise ValueError(f"Invalid data detected: {pattern}")
        return True
    ```
 
-3. **벡터 DB 로그 모니터링**
-   벡터 DB 접근 시도를 로깅하고, 비정상적인 요청을 분석.
-   ```bash
-   # Example command
-   grep "unauthorized" vector_db.log | tail -n 20
+3. **벡터 DB 접근 및 변경 사항 로깅**  
+   **로그에 추가 정보 포함 및 경고 알림**:
+   - 접근 시간, 사용자 ID, 요청 유형 등을 기록.
+   - 비정상적인 요청은 관리자에게 즉시 알림.
+   ```python
+   import logging
+
+   logging.basicConfig(filename='vector_db.log', level=logging.INFO)
+
+   def log_access(user, action, resource):
+       logging.info(f"User: {user.id}, Action: {action}, Resource: {resource}, Time: {datetime.now()}")
+
+   def detect_anomalies():
+       with open('vector_db.log', 'r') as log_file:
+           logs = log_file.readlines()
+           for log in logs:
+               if "unauthorized" in log:
+                   alert_admin(log)
    ```
 
----
+4. **중복 데이터 필터링**  
+   데이터 중복 여부를 확인하여 불필요한 데이터 저장 방지.  
+   - **추가: 동시성 문제 해결을 위한 Lock 사용**  
+   ```python
+   import hashlib
+   import threading
+
+   class VectorDB:
+       def __init__(self):
+           self.data_hashes = set()
+           self.lock = threading.Lock()
+
+       def check_and_add(self, content):
+           content_hash = hashlib.md5(content.encode()).hexdigest()
+           with self.lock:
+               if content_hash in self.data_hashes:
+                   return False  # 중복 데이터
+               self.data_hashes.add(content_hash)
+           return True
+   ```
+
+5. **데이터 삭제 정책 (Retention Policy)**  
+   오래되거나 불필요한 데이터를 주기적으로 삭제하여 데이터 오염을 방지.
+   ```python
+   import time
+
+   def clean_old_data(db, retention_period_days=30):
+       current_time = time.time()
+       for record in db.get_all_records():
+           if (current_time - record['timestamp']) > retention_period_days * 86400:
+               db.delete(record['id'])
+   ```
+
+6. **AI 학습 데이터 평가 및 테스트**  
+   데이터를 샘플링하여 무작위로 검증하고, 학습 모델의 성능을 정기적으로 테스트.  
+   - 데이터 검증 및 테스트 워크플로 설정.
+   ```python
+   def evaluate_data_quality(data_sample):
+       # 테스트 데이터 정확성 및 품질 검증
+       for entry in data_sample:
+           if not validate_vector_data(entry):
+               raise ValueError("Data sample failed quality check.")
+   ```
+
+7. **TLS 및 암호화를 통한 데이터 보호**  
+   데이터 전송 시 암호화(TLS/SSL)와 벡터 DB 내부 데이터 암호화.
+   ```python
+   # Example of TLS in a Python request
+   import requests
+
+   response = requests.post("https://vector-db.example.com", json=data, verify=True)
+   ```
+
 
 ### **2.2 오류 메시지 표준화**
 1. **사용자 친화적 메시지 설계**
@@ -141,21 +246,41 @@
 
 ## **3. 에이전트 점검**
 
-### **3.1 샌드박스 적용**
-#### **구체적인 구현 방안**
-1. **Docker 컨테이너 실행 환경**
-   코드를 격리된 컨테이너에서 실행하여 시스템 침해 방지:
-   ```bash
-   docker run --rm -v /secure_area:/code -m 512m sandbox python3 /code/script.py
-   ```
+### **3.1 API 매개 변수 변조**
+**문제**: 공격자가 API 요청을 조작하여 의도치 않은 동작을 유발하거나 시스템에 악영향을 미칠 수 있음.  
+**해결 방안**:
+- **요청 매개변수 유효성 검사**: 모든 입력 데이터의 형식, 범위, 값 등을 검증.
+- **서명 기반 검증**: 요청의 무결성을 보장하기 위해 서명(HMAC 등) 사용.
+- **로그 기록 및 모니터링**: 비정상적인 요청 패턴 감지.
 
-2. **리소스 제한 적용**  
-   `cgroups`를 사용해 컨테이너의 리소스 사용량 제한:
-   ```bash
-   docker run --memory="256m" --cpus="1" sandbox
-   ```
+#### **샘플 코드**
+```python
+import hmac
+import hashlib
 
----
+SECRET_KEY = "my_secret_key"
+
+# 서명 생성
+def generate_signature(data):
+    return hmac.new(SECRET_KEY.encode(), data.encode(), hashlib.sha256).hexdigest()
+
+# 요청 검증
+def validate_request(data, client_signature):
+    server_signature = generate_signature(data)
+    if not hmac.compare_digest(server_signature, client_signature):
+        raise ValueError("Request parameter tampering detected.")
+    return True
+
+# 사용 예제
+try:
+    data = "action=transfer&amount=100"
+    client_signature = generate_signature(data)  # 클라이언트에서 생성한 서명
+    validate_request(data, client_signature)
+    print("Request is valid.")
+except ValueError as e:
+    print(e)
+```
+
 
 ### **3.2 API 보안 강화**
 1. **매개 변수 스키마 검증**
@@ -175,7 +300,46 @@
        validate(instance=request, schema=schema)
    ```
 
-2. **JWT 인증 추가**
+
+### **3.3 샌드박스 미적용**
+**문제**: 코드 실행 환경에서 격리가 이루어지지 않을 경우, 악성 코드 실행으로 시스템이 손상될 위험.  
+**해결 방안**:
+- **샌드박스 환경 사용**: 실행된 코드가 시스템 리소스에 직접 접근하지 못하도록 격리.
+- **제한된 권한 실행**: 제한된 자원만 사용 가능하도록 컨테이너화.
+- **시간 제한 추가**: 실행 시간이 초과될 경우 프로세스 종료.
+
+#### **샘플 코드**
+```python
+import subprocess
+
+def execute_in_sandbox(code):
+    # 샌드박스 환경에서 Python 코드를 실행
+    try:
+        result = subprocess.run(
+            ["python3", "-c", code],
+            timeout=5,  # 실행 시간 제한
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        ## subprocess.run("rm -rf /", shell=True)  # < 위험 !!! >
+
+        return result.stdout
+    except subprocess.TimeoutExpired:
+        return "Execution timed out."
+    except subprocess.CalledProcessError as e:
+        return f"Error during execution: {e}"
+
+# 사용 예제
+code = "print('Hello, World!')"  # 안전한 코드
+output = execute_in_sandbox(code)
+print(output)
+```
+---
+
+
+
+### **3.4 샌드박스 미적용**
    인증 토큰의 유효성을 확인하고 API 접근을 제어:
    ```python
    import jwt
@@ -190,6 +354,29 @@
        except jwt.InvalidTokenError:
            raise ValueError("Invalid token.")
    ```
+
+### **3.5 사용자 동의 절차 누락**
+**문제**: 민감한 작업이나 시스템 변경이 사용자 동의 없이 이루어질 경우 신뢰성과 데이터 무결성 문제 발생.  
+**해결 방안**:
+- **명시적 사용자 확인**: 중요 작업 전에 사용자 동의를 명시적으로 요청.
+- **이중 확인 절차**: 작업을 진행하기 전에 2단계 확인(예: 이메일 또는 OTP) 추가.
+
+#### **샘플 코드**
+```python
+def confirm_user_action(action):
+    print(f"You are about to perform: {action}")
+    confirmation = input("Do you want to proceed? (yes/no): ").strip().lower()
+    if confirmation != "yes":
+        raise PermissionError("User denied the action.")
+    return True
+
+# 사용 예제
+try:
+    confirm_user_action("delete all records")
+    print("Action approved.")
+except PermissionError as e:
+    print(e)
+```
 
 ---
 
